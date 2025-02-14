@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0846f90c11d75084597495e5a8cb543b, type: 3}
+  m_Name: _GameSetup
+  m_EditorClassIdentifier: 
+  machineFolderPath: Assets\Arcades\ArcadeGames\Template\_GameSetup
+  gameName: New Game
+  arcadeMachineColor: {r: 0.5235849, g: 0.7396846, b: 1, a: 1}
+  arcadeGamePrefabName: ArcadeGame
+  arcadeTextureName: txt_Arcade
+  arcadeEmissionName: txt_Arcade_em
+  insertCoinTextureName: txt_InsertCoin
+  arcadeGamePrefab: {fileID: 7322771587497186681, guid: 731adca7a7cd29a4cab48931b0c58419, type: 3}
+  arcadeTexture: {fileID: 2800000, guid: 158ab7699afd369459c0d5eb19a7cca6, type: 3}
+  arcadeEmission: {fileID: 2800000, guid: 8ee66fb5b4005cb4889aec17ce503227, type: 3}
+  insertCoinTexture: {fileID: 2800000, guid: 28bd01948a7c0ab47825ed58cd276111, type: 3}
