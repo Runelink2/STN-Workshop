@@ -464,7 +464,8 @@ public class ModSDKWindow : EditorWindow
         // Always produce a per‑mod catalog (either to the provided output dir, or into StreamingAssets mods path)
         if (!string.IsNullOrEmpty(modOutputDir))
         {
-            BuildPerModCatalog(modOutputDir, group);
+            var perModOutDir = Path.Combine(modOutputDir, San(modName));
+            BuildPerModCatalog(perModOutDir, group);
             return;
         }
 
@@ -480,6 +481,12 @@ public class ModSDKWindow : EditorWindow
     {
         try
         {
+            // Full clean: ensure destination is empty before building into it
+            try
+            {
+                if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
+            }
+            catch { /* ignore, recreate below */ }
             Directory.CreateDirectory(outDir);
 
             // Create a temporary, persisted Addressables Settings asset under Assets (required by build pipeline)
@@ -549,20 +556,33 @@ public class ModSDKWindow : EditorWindow
                 AddressableAssetSettingsDefaultObject.Settings = previous;
             }
 
-            // Post-build: locate catalog files and ensure they exist in outDir
+            // Post-build: copy ONLY the per‑mod catalog from the temp build path → outDir
             var platform = PlatformMappingService.GetPlatformPathSubFolder();
             var tempBuildPath = ResolveProfilePath(tempSettings, AddressableAssetSettings.kLocalBuildPath, platform);
-            var streamingAA = Path.Combine(Application.streamingAssetsPath, "aa", platform);
-            var libraryAA = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "Library", "com.unity.addressables", "aa", platform);
-            var candidates = new[] { outDir, tempBuildPath, streamingAA, libraryAA };
-            int copiedCatalogs = 0;
-            foreach (var root in candidates.Distinct().Where(d => !string.IsNullOrEmpty(d) && Directory.Exists(d)))
+            // Clean old catalogs to avoid picking up a platform catalog with StreamingAssets paths
+            foreach (var old in Directory.GetFiles(outDir, "catalog*.*", SearchOption.AllDirectories))
             {
-                foreach (var file in Directory.GetFiles(root, "catalog*.*", SearchOption.AllDirectories))
+                try { File.Delete(old); } catch { }
+            }
+            int copiedCatalogs = 0;
+            if (!string.IsNullOrEmpty(tempBuildPath) && Directory.Exists(tempBuildPath))
+            {
+                foreach (var file in Directory.GetFiles(tempBuildPath, "catalog*.*", SearchOption.AllDirectories))
                 {
                     var name = Path.GetFileName(file);
                     var dst = Path.Combine(outDir, name);
                     try { File.Copy(file, dst, true); copiedCatalogs++; } catch { }
+                }
+            }
+            // Also try the Library aa cache used by Addressables for this build target
+            var libraryAA = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "Library", "com.unity.addressables", "aa", platform);
+            if (Directory.Exists(libraryAA))
+            {
+                foreach (var file in Directory.GetFiles(libraryAA, "catalog*.*", SearchOption.AllDirectories))
+                {
+                    var name = Path.GetFileName(file);
+                    var dst = Path.Combine(outDir, name);
+                    try { if (!File.Exists(dst)) { File.Copy(file, dst, true); copiedCatalogs++; } } catch { }
                 }
             }
 
@@ -583,7 +603,7 @@ public class ModSDKWindow : EditorWindow
             // Quick check: report expected load path and whether a catalog is present
             var expectedLoadPath = bundled.LoadPath.GetValue(tempSettings);
             var catalogs = Directory.GetFiles(outDir, "catalog*.*", SearchOption.AllDirectories).Length;
-            Debug.Log($"[ModSDK] Per-mod catalog built. Expected LoadPath='{expectedLoadPath}'. Catalog files found in outDir: {catalogs} (copied {copiedCatalogs}). Folder: {outDir}");
+            Debug.Log($"[ModSDK] Per-mod catalog built. Expected LoadPath='{expectedLoadPath}'. Catalog files in outDir: {catalogs} (copied {copiedCatalogs}). Folder: {outDir}");
             EditorUtility.RevealInFinder(outDir);
 
             // Tokenize absolute InternalIds to {ModRoot} so they resolve on player machines
