@@ -12,6 +12,7 @@ using UnityEngine.AddressableAssets;
 using UnityEditor.AddressableAssets.Build;
 using UnityEditor.AddressableAssets.Build.DataBuilders;
 using Object = UnityEngine.Object;
+using STN.ModSDK;
 
 public class ModSDKWindow : EditorWindow
 {
@@ -40,6 +41,42 @@ public class ModSDKWindow : EditorWindow
     // ---------- Menu ----------
     [MenuItem("Modding/Open Mod SDK")]
     public static void Open() => GetWindow<ModSDKWindow>("Mod SDK");
+
+    // Quick creator for weapon settings (GunConfig ScriptableObject)
+    [MenuItem("Modding/Create Weapon Settings (GunConfig)")]
+    public static void CreateWeaponSettings()
+    {
+        try
+        {
+            var targetDir = "Assets";
+            if (Selection.activeObject != null)
+            {
+                var selPath = AssetDatabase.GetAssetPath(Selection.activeObject);
+                if (!string.IsNullOrEmpty(selPath))
+                {
+                    if (System.IO.Directory.Exists(selPath)) targetDir = selPath;
+                    else
+                    {
+                        var dir = System.IO.Path.GetDirectoryName(selPath);
+                        if (!string.IsNullOrEmpty(dir)) targetDir = dir;
+                    }
+                }
+            }
+            var defaultPath = System.IO.Path.Combine(targetDir, "ClientWeapon.asset");
+            defaultPath = AssetDatabase.GenerateUniqueAssetPath(defaultPath);
+
+            var asset = ScriptableObject.CreateInstance<GunConfig>();
+            AssetDatabase.CreateAsset(asset, defaultPath);
+            AssetDatabase.SaveAssets();
+            EditorUtility.FocusProjectWindow();
+            Selection.activeObject = asset;
+            Debug.Log($"[ModSDK] Created Weapon Settings asset at '{defaultPath}'.");
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"[ModSDK] Failed to create Weapon Settings: {ex.Message}");
+        }
+    }
 
     private void OnEnable()
     {
@@ -73,6 +110,59 @@ public class ModSDKWindow : EditorWindow
             }
             using (new EditorGUILayout.HorizontalScope())
             {
+                if (GUILayout.Button(new GUIContent("Load Mod (Temp)…", "Pick an existing per‑mod settings folder under _ModSDK_Temp"), GUILayout.Width(160)))
+                {
+                    var baseTemp = Path.Combine(Application.dataPath, "_ModSDK_Temp");
+                    Directory.CreateDirectory(baseTemp);
+                    var picked = EditorUtility.OpenFolderPanel("Select Mod Settings Folder", baseTemp, "");
+                    if (!string.IsNullOrEmpty(picked))
+                    {
+                        var hasSettings = File.Exists(Path.Combine(picked, "AddressableAssetSettings.asset"));
+                        if (hasSettings)
+                        {
+                            modName = San(new DirectoryInfo(picked).Name);
+                            Repaint();
+                        }
+                        else
+                        {
+                            EditorUtility.DisplayDialog("Not a Mod Settings Folder", "The selected folder does not contain AddressableAssetSettings.asset.", "OK");
+                        }
+                    }
+                }
+                if (GUILayout.Button(new GUIContent("Create Mod", "Create per‑mod Addressables settings in _ModSDK_Temp/<ModName>"), GUILayout.Width(120)))
+                {
+                    var newName = San(string.IsNullOrEmpty(modName) ? "MyMod" : modName);
+                    modName = newName;
+                    var settings = GetOrCreatePerModSettings();
+                    if (settings != null)
+                    {
+                        // Ensure our working group exists and has required schemas
+                        var group = EnsureGroup(settings, targetGroupName);
+                        var bundled = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();
+                        bundled.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+                        bundled.BundleMode  = BundledAssetGroupSchema.BundlePackingMode.PackSeparately;
+                        var update = group.GetSchema<ContentUpdateGroupSchema>() ?? group.AddSchema<ContentUpdateGroupSchema>();
+                        update.StaticContent = false;
+
+                        // Create and set a local profile that points to a dummy path under the mod temp (not used for build output)
+                        var profiles = settings.profileSettings;
+                        var profileId = settings.activeProfileId;
+                        if (string.IsNullOrEmpty(profileId)) profileId = profiles.AddProfile("Mod", null);
+                        settings.activeProfileId = profileId;
+                        var modTempRoot = Path.Combine("Assets", "_ModSDK_Temp", newName).Replace('\\','/');
+                        EnsureProfileVariable(settings, AddressableAssetSettings.kLocalBuildPath, modTempRoot);
+                        EnsureProfileVariable(settings, AddressableAssetSettings.kLocalLoadPath, modTempRoot);
+                        bundled.BuildPath.SetVariableByName(settings, AddressableAssetSettings.kLocalBuildPath);
+                        bundled.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kLocalLoadPath);
+                        settings.SetDirty(AddressableAssetSettings.ModificationEvent.GroupSchemaModified, group, true, false);
+                        AssetDatabase.SaveAssets();
+                        Debug.Log($"[ModSDK] Mod context ready: '{newName}' → Assets/_ModSDK_Temp/{newName}");
+                    }
+                }
+                GUILayout.FlexibleSpace();
+            }
+            using (new EditorGUILayout.HorizontalScope())
+            {
                 if (GUILayout.Button("Reload")) LoadPublicAddresses();
                 if (GUILayout.Button("Reveal File"))
                 {
@@ -84,6 +174,16 @@ public class ModSDKWindow : EditorWindow
                     }
                 }
             }
+        }
+
+        // Gate the rest of the UI until a mod context is selected/available
+        var perModSettingsPath = Path.Combine("Assets", "_ModSDK_Temp", San(modName), "AddressableAssetSettings.asset");
+        bool hasModContext = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(perModSettingsPath) != null;
+        if (!hasModContext)
+        {
+            EditorGUILayout.Space(6);
+            EditorGUILayout.HelpBox("Select or create a mod above to continue.", MessageType.Info);
+            return;
         }
 
         // ASSIGN
@@ -134,7 +234,18 @@ public class ModSDKWindow : EditorWindow
         using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
         {
             if (GUILayout.Button("Run Validation"))
-                ValidateMod(out _);
+            {
+                if (ValidateMod(out var issues))
+                {
+                    EditorUtility.DisplayDialog("Validation", "Validation passed.", "OK");
+                }
+                else
+                {
+                    var msg = issues != null && issues.Count > 0 ? ("Found " + issues.Count + " issue(s). See Console for details.") : "Validation failed.";
+                    Debug.LogWarning(issues != null && issues.Count > 0 ? "[ModSDK] Validation issues:\n - " + string.Join("\n - ", issues) : "[ModSDK] Validation failed.");
+                    EditorUtility.DisplayDialog("Validation failed", msg, "OK");
+                }
+            }
             scrollValidate = EditorGUILayout.BeginScrollView(scrollValidate, GUILayout.MinHeight(80), GUILayout.MaxHeight(180));
             EditorGUILayout.EndScrollView();
             EditorGUILayout.HelpBox("Checks: duplicates, spaces in addresses, type mismatches vs. public list, non-public overrides.", MessageType.None);
@@ -330,15 +441,20 @@ public class ModSDKWindow : EditorWindow
     // ---------- Assign ----------
     private void AssignSelectedToAddress(PublicEntry target)
     {
-        var settings = AddressableAssetSettingsDefaultObject.Settings;
-        if (settings == null) { Debug.LogError("Addressables settings not found."); return; }
+        var settings = GetOrCreatePerModSettings();
 
         var group = EnsureGroup(settings, targetGroupName);
 
         var selected = GetSelectedGuids(true);
         if (selected.Count == 0) { Debug.LogWarning("Select one or more assets in the Project view."); return; }
 
-        var existingAddresses = new HashSet<string>(settings.groups.SelectMany(g => g.entries).Select(e => e.address));
+        var existingAddresses = new HashSet<string>(
+            settings.groups
+                .Where(g => g != null)
+                .SelectMany(g => g.entries ?? Enumerable.Empty<AddressableAssetEntry>())
+                .Where(e => e != null)
+                .Select(e => e.address ?? string.Empty)
+        );
         int ok = 0, created = 0, moved = 0, mismatched = 0;
 
         Undo.RecordObject(settings, "Assign Mod Addresses");
@@ -374,9 +490,22 @@ public class ModSDKWindow : EditorWindow
             // move to mod group
             if (entry.parentGroup != group)
             {
-                settings.CreateOrMoveEntry(guid, group);
+                settings.CreateOrMoveEntry(entry.guid, group);
                 moved++;
             }
+
+            // tag entry for this mod, so we can build a per‑mod catalog later
+            try
+            {
+                var modLabel = $"mod:{San(modName)}";
+                var labels = settings.GetLabels();
+                bool has = false; foreach (var l in labels) { if (l == modLabel) { has = true; break; } }
+                if (!has) settings.AddLabel(modLabel);
+                // Addressables API in this version doesn't expose HasLabel directly; use labels list
+                var elabels = new HashSet<string>(entry.labels ?? Enumerable.Empty<string>());
+                if (!elabels.Contains(modLabel)) entry.SetLabel(modLabel, true);
+            }
+            catch { }
 
             ok++;
         }
@@ -392,10 +521,10 @@ public class ModSDKWindow : EditorWindow
     private bool ValidateMod(out List<string> issues)
     {
         issues = new List<string>();
-        var settings = AddressableAssetSettingsDefaultObject.Settings;
-        if (settings == null) { issues.Add("Addressables settings not found."); return false; }
+        var settings = GetOrCreatePerModSettings();
+        if (settings == null) { issues.Add("Per‑mod Addressables settings not found."); return false; }
 
-        var group = settings.groups.FirstOrDefault(g => g != null && g.name == targetGroupName);
+        var group = settings.groups.FirstOrDefault(g => g != null && g.name == targetGroupName) ?? EnsureGroup(settings, targetGroupName);
         if (group == null) { issues.Add($"Group '{targetGroupName}' not found."); return false; }
 
         // Build a quick map of public addresses -> expected type
@@ -404,7 +533,9 @@ public class ModSDKWindow : EditorWindow
             .ToDictionary(g => g.Key, g => g.First().type ?? "");
 
         var taken = new HashSet<string>();
-        foreach (var e in group.entries)
+        string modLabel = $"mod:{San(modName)}";
+        var entries = group.entries.Where(e => e != null && e.labels != null && e.labels.Contains(modLabel)).ToList();
+        foreach (var e in entries)
         {
             var addr = e.address ?? "";
             if (string.IsNullOrWhiteSpace(addr))
@@ -447,7 +578,7 @@ public class ModSDKWindow : EditorWindow
                 return;
         }
 
-        var settings = AddressableAssetSettingsDefaultObject.Settings;
+        var settings = GetOrCreatePerModSettings();
         if (settings == null) { Debug.LogError("Addressables settings not found."); return; }
 
         // Ensure target group has Pack Separately / LZ4 / Local paths
@@ -489,10 +620,11 @@ public class ModSDKWindow : EditorWindow
             catch { /* ignore, recreate below */ }
             Directory.CreateDirectory(outDir);
 
-            // Create a temporary, persisted Addressables Settings asset under Assets (required by build pipeline)
+            // Use or create the per‑mod Addressables settings in temp (so Assign and Build share the same settings)
             var tempRoot = Path.Combine("Assets", "_ModSDK_Temp", San(modName));
             Directory.CreateDirectory(tempRoot);
-            var tempSettings = AddressableAssetSettings.Create(tempRoot, "AddressableAssetSettings", true, true);
+            var tempSettings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(Path.Combine(tempRoot, "AddressableAssetSettings.asset"));
+            if (tempSettings == null) tempSettings = AddressableAssetSettings.Create(tempRoot, "AddressableAssetSettings", true, true);
 
             // Use a dedicated profile; point Build/Load to the absolute mod folder
             var profiles = tempSettings.profileSettings;
@@ -508,7 +640,7 @@ public class ModSDKWindow : EditorWindow
             profiles.SetValue(profileId, AddressableAssetSettings.kLocalBuildPath, modRoot);
             profiles.SetValue(profileId, AddressableAssetSettings.kLocalLoadPath, modRoot);
 
-            // Create a group and mirror entries from sourceGroup
+            // Create a group and mirror entries from sourceGroup that belong to this mod only
             var schemas = new List<AddressableAssetGroupSchema>();
             var bundled = ScriptableObject.CreateInstance<BundledAssetGroupSchema>();
             bundled.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
@@ -522,8 +654,11 @@ public class ModSDKWindow : EditorWindow
                 typeof(BundledAssetGroupSchema), typeof(ContentUpdateGroupSchema));
             tempSettings.DefaultGroup = modGroup;
 
+            string modLabel = $"mod:{San(modName)}";
             foreach (var e in sourceGroup.entries.ToList())
             {
+                if (e == null) continue;
+                if (!(e.labels != null && e.labels.Contains(modLabel))) continue;
                 var entry = tempSettings.CreateOrMoveEntry(e.guid, modGroup);
                 entry.SetAddress(e.address);
             }
@@ -544,6 +679,10 @@ public class ModSDKWindow : EditorWindow
 
             // Swap default settings to the temp settings for the build
             var previous = AddressableAssetSettingsDefaultObject.Settings;
+            // Addressables (1.19) writes DefaultObject.asset under Assets/AddressableAssetsData on set; ensure dir exists and delete after
+            var defaultObjDir = Path.Combine("Assets", "AddressableAssetsData");
+            bool createdDefaultDir = false;
+            if (!Directory.Exists(defaultObjDir)) { Directory.CreateDirectory(defaultObjDir); createdDefaultDir = true; AssetDatabase.Refresh(); }
             AddressableAssetSettingsDefaultObject.Settings = tempSettings;
 
             try
@@ -554,6 +693,13 @@ public class ModSDKWindow : EditorWindow
             {
                 // Restore
                 AddressableAssetSettingsDefaultObject.Settings = previous;
+                // Clean up the auto-created DefaultObject.asset and folder if we made it
+                if (createdDefaultDir)
+                {
+                    try { AssetDatabase.DeleteAsset("Assets/AddressableAssetsData/DefaultObject.asset"); } catch { }
+                    try { AssetDatabase.DeleteAsset("Assets/AddressableAssetsData"); } catch { }
+                    AssetDatabase.Refresh();
+                }
             }
 
             // Post-build: copy ONLY the per‑mod catalog from the temp build path → outDir
@@ -613,6 +759,27 @@ public class ModSDKWindow : EditorWindow
         {
             Debug.LogError($"[ModSDK] Per-mod build failed: {ex.Message}");
         }
+    }
+
+    // ---------- Helpers: per‑mod Addressables settings ----------
+    private AddressableAssetSettings GetOrCreatePerModSettings()
+    {
+        try
+        {
+            var root = Path.Combine("Assets", "_ModSDK_Temp", San(modName));
+            Directory.CreateDirectory(root);
+            var assetPath = Path.Combine(root, "AddressableAssetSettings.asset");
+            var settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(assetPath);
+            if (settings == null)
+            {
+                // Persist the settings asset so the folder is not empty and can be reloaded later
+                settings = AddressableAssetSettings.Create(root, "AddressableAssetSettings", true, true);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+            }
+            return settings;
+        }
+        catch { return AddressableAssetSettingsDefaultObject.Settings; }
     }
 
     private static void PostprocessCatalogTokenize(string outDir)
