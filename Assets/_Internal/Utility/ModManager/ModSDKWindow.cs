@@ -37,6 +37,8 @@ public class ModSDKWindow : EditorWindow
 
     private Vector2 scrollAssign;
     private Vector2 scrollValidate;
+        private Vector2 scrollOverrides;
+        private string searchOverrides = "";
 
     // ---------- Menu ----------
     [MenuItem("Modding/Open Mod SDK")]
@@ -211,7 +213,8 @@ public class ModSDKWindow : EditorWindow
 
             scrollAssign = EditorGUILayout.BeginScrollView(scrollAssign, GUILayout.MinHeight(220), GUILayout.MaxHeight(360));
             var root = BuildAddressTree(filtered);
-            DrawAddressTree(root, 0);
+            var overrideMap = ComputeOverrideMap();
+            DrawAddressTree(root, 0, overrideMap);
             EditorGUILayout.EndScrollView();
 
             if (GUILayout.Button("Assign Selected To Highlighted"))
@@ -226,6 +229,51 @@ public class ModSDKWindow : EditorWindow
             }
 
             EditorGUILayout.HelpBox("Tip: select your asset(s) in Project, filter then browse like folders and click an address to select it.", MessageType.None);
+        }
+
+        // OVERRIDES BROWSER
+        EditorGUILayout.Space(6);
+        EditorGUILayout.LabelField("Current overrides in this mod", EditorStyles.boldLabel);
+        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+        {
+            searchOverrides = EditorGUILayout.TextField("Search", searchOverrides);
+            var overrides = ComputeOverrideMap();
+            if (!string.IsNullOrEmpty(searchOverrides))
+            {
+                var q = searchOverrides.Trim().ToLowerInvariant();
+                overrides = overrides
+                    .Where(kv => (kv.Key ?? "").ToLowerInvariant().Contains(q) || (kv.Value ?? "").ToLowerInvariant().Contains(q))
+                    .ToDictionary(k => k.Key, v => v.Value);
+            }
+            EditorGUILayout.LabelField($"Matching: {overrides.Count} overrides", EditorStyles.miniLabel);
+
+            scrollOverrides = EditorGUILayout.BeginScrollView(scrollOverrides, GUILayout.MinHeight(120), GUILayout.MaxHeight(260));
+            foreach (var kv in overrides.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    bool isSel = string.Equals(selectedAddress, kv.Key, StringComparison.Ordinal);
+                    var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
+                    if (GUILayout.Button(new GUIContent(kv.Key), style, GUILayout.ExpandWidth(true)))
+                        selectedAddress = kv.Key;
+                    GUILayout.FlexibleSpace();
+                    var right = new GUIContent("→ " + CompactAssetPath(kv.Value), kv.Value);
+                    EditorGUILayout.LabelField(right, EditorStyles.miniLabel, GUILayout.ExpandWidth(false));
+                    if (GUILayout.Button("Ping", GUILayout.Width(44)))
+                    {
+                        var obj = AssetDatabase.LoadAssetAtPath<Object>(kv.Value);
+                        if (obj != null) EditorGUIUtility.PingObject(obj);
+                    }
+                    if (GUILayout.Button("Select", GUILayout.Width(56)))
+                    {
+                        var obj = AssetDatabase.LoadAssetAtPath<Object>(kv.Value);
+                        if (obj != null) Selection.activeObject = obj;
+                    }
+                }
+            }
+            EditorGUILayout.EndScrollView();
+            if (overrides.Count == 0)
+                EditorGUILayout.HelpBox("No overrides found for this mod.", MessageType.Info);
         }
 
         // VALIDATE
@@ -302,16 +350,17 @@ public class ModSDKWindow : EditorWindow
         }
     }
 
-    private List<PublicEntry> FilterPublic(string q)
+	private List<PublicEntry> FilterPublic(string q)
     {
         var list = publicCatalog.entries;
         if (string.IsNullOrWhiteSpace(q)) return list;
         q = q.Trim().ToLowerInvariant();
-        return list.Where(e =>
-            (e.address ?? "").ToLowerInvariant().Contains(q) ||
-            (e.type    ?? "").ToLowerInvariant().Contains(q) ||
-            (e.role    ?? "").ToLowerInvariant().Contains(q) ||
-            (e.labels  ?? "").ToLowerInvariant().Contains(q)).ToList();
+		return list.Where(e =>
+			(e.address ?? "").ToLowerInvariant().Contains(q) ||
+			(e.type    ?? "").ToLowerInvariant().Contains(q) ||
+			(e.role    ?? "").ToLowerInvariant().Contains(q) ||
+			(e.labels  ?? "").ToLowerInvariant().Contains(q) ||
+			(e.meta    ?? "").ToLowerInvariant().Contains(q)).ToList();
     }
 
     private List<PublicEntry> FilterPublic(string text, string labelContains, string folderPrefix)
@@ -321,8 +370,8 @@ public class ModSDKWindow : EditorWindow
         var folder = (folderPrefix ?? "").Replace('\\','/').Trim();
         var list = publicCatalog.entries;
         IEnumerable<PublicEntry> res = list;
-        if (!string.IsNullOrEmpty(q))
-            res = res.Where(e => (e.address ?? "").ToLowerInvariant().Contains(q) || (e.type ?? "").ToLowerInvariant().Contains(q) || (e.role ?? "").ToLowerInvariant().Contains(q) || (e.labels ?? "").ToLowerInvariant().Contains(q));
+		if (!string.IsNullOrEmpty(q))
+			res = res.Where(e => (e.address ?? "").ToLowerInvariant().Contains(q) || (e.type ?? "").ToLowerInvariant().Contains(q) || (e.role ?? "").ToLowerInvariant().Contains(q) || (e.labels ?? "").ToLowerInvariant().Contains(q) || (e.meta ?? "").ToLowerInvariant().Contains(q));
         if (!string.IsNullOrEmpty(labelQ))
             res = res.Where(e => (e.labels ?? "").ToLowerInvariant().Contains(labelQ));
         if (!string.IsNullOrEmpty(folder))
@@ -401,26 +450,44 @@ public class ModSDKWindow : EditorWindow
         return root;
     }
 
-    private void DrawAddressTree(TreeNode node, int indent)
+    private void DrawAddressTree(TreeNode node, int indent, Dictionary<string, string> overrideMap)
     {
         if (node == null) return;
         foreach (var child in node.children)
         {
             if (child.isLeaf)
             {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    // Indent one more level than the parent folder so leaves align under the folder content
-                    GUILayout.Space(12 * (indent + 1));
-                    bool isSel = string.Equals(selectedAddress, child.fullPath, StringComparison.Ordinal);
-                    var label = new GUIContent(child.name + (string.IsNullOrEmpty(child.entry?.type) ? "" : $"  [{child.entry.type}]"));
-                    var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
-                    if (GUILayout.Button(label, style, GUILayout.ExpandWidth(true)))
-                        selectedAddress = child.fullPath;
-                }
+				using (new EditorGUILayout.HorizontalScope())
+				{
+					// Indent one more level than the parent folder so leaves align under the folder content
+					GUILayout.Space(12 * (indent + 1));
+					bool isSel = string.Equals(selectedAddress, child.fullPath, StringComparison.Ordinal);
+					var typeText = string.IsNullOrEmpty(child.entry?.type) ? "" : $"  [{child.entry.type}]";
+					var roleText = string.IsNullOrEmpty(child.entry?.role) ? "" : $" ({child.entry.role})";
+					var label = new GUIContent(child.name + typeText + roleText);
+					// Tooltip shows full context, including meta
+					{
+						var tt = "";
+						if (!string.IsNullOrEmpty(child.fullPath)) tt += $"Address: {child.fullPath}\n";
+						if (!string.IsNullOrEmpty(child.entry?.type)) tt += $"Type: {child.entry.type}\n";
+						if (!string.IsNullOrEmpty(child.entry?.role)) tt += $"Role: {child.entry.role}\n";
+						if (!string.IsNullOrEmpty(child.entry?.meta)) tt += $"Meta: {child.entry.meta}";
+						label.tooltip = tt;
+					}
+					var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
+					if (GUILayout.Button(label, style, GUILayout.ExpandWidth(false)))
+						selectedAddress = child.fullPath;
+					GUILayout.FlexibleSpace();
+					// Inline chosen override path on the right
+					if (overrideMap != null && overrideMap.TryGetValue(child.fullPath, out var overPath) && !string.IsNullOrEmpty(overPath))
+					{
+						var right = new GUIContent("→ " + CompactAssetPath(overPath), overPath);
+						EditorGUILayout.LabelField(right, EditorStyles.miniLabel, GUILayout.ExpandWidth(false));
+					}
+				}
             }
-            else
-            {
+			else
+			{
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     GUILayout.Space(12 * indent);
@@ -432,10 +499,53 @@ public class ModSDKWindow : EditorWindow
                         else treeExpanded.Remove(child.fullPath);
                     }
                 }
-                if (treeExpanded.Contains(child.fullPath))
-                    DrawAddressTree(child, indent + 1);
+				if (treeExpanded.Contains(child.fullPath))
+                    DrawAddressTree(child, indent + 1, overrideMap);
             }
         }
+    }
+
+	private static string CompactString(string text, int maxLength)
+	{
+		if (string.IsNullOrEmpty(text)) return "";
+		var t = text.Trim();
+		if (maxLength <= 1) return "…";
+		if (t.Length <= maxLength) return t;
+		return "…" + t.Substring(t.Length - (maxLength - 1));
+	}
+
+    private Dictionary<string, string> ComputeOverrideMap()
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            var settings = GetOrCreatePerModSettings();
+            if (settings == null) return map;
+            var group = settings.groups.FirstOrDefault(g => g != null && g.name == targetGroupName);
+            if (group == null) return map;
+            string modLabel = $"mod:{San(modName)}";
+            foreach (var e in group.entries)
+            {
+                if (e == null) continue;
+                if (!(e.labels != null && e.labels.Contains(modLabel))) continue;
+                var path = AssetDatabase.GUIDToAssetPath(e.guid);
+                if (string.IsNullOrEmpty(path)) continue;
+                map[e.address ?? ""] = path.Replace('\\','/');
+            }
+        }
+        catch { }
+        return map;
+    }
+
+    private static string CompactAssetPath(string assetPath)
+    {
+        if (string.IsNullOrEmpty(assetPath)) return "";
+        assetPath = assetPath.Replace('\\','/');
+        var fileName = Path.GetFileName(assetPath);
+        var parent = Path.GetFileName(Path.GetDirectoryName(assetPath));
+        var shorty = string.IsNullOrEmpty(parent) ? fileName : (parent + "/" + fileName);
+        if (shorty.Length > 42) shorty = "…" + shorty.Substring(shorty.Length - 42);
+        return shorty;
     }
 
     // ---------- Assign ----------
@@ -620,17 +730,19 @@ public class ModSDKWindow : EditorWindow
             catch { /* ignore, recreate below */ }
             Directory.CreateDirectory(outDir);
 
-            // Use or create the per‑mod Addressables settings in temp (so Assign and Build share the same settings)
-            var tempRoot = Path.Combine("Assets", "_ModSDK_Temp", San(modName));
-            Directory.CreateDirectory(tempRoot);
-            var tempSettings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(Path.Combine(tempRoot, "AddressableAssetSettings.asset"));
-            if (tempSettings == null) tempSettings = AddressableAssetSettings.Create(tempRoot, "AddressableAssetSettings", true, true);
+            // Build uses an isolated copy of Addressables settings so working assignments remain intact
+            var mainRoot = Path.Combine("Assets", "_ModSDK_Temp", San(modName));
+            Directory.CreateDirectory(mainRoot);
+            var buildRoot = Path.Combine(mainRoot, "BuildTemp");
+            try { if (Directory.Exists(buildRoot)) Directory.Delete(buildRoot, true); } catch { }
+            Directory.CreateDirectory(buildRoot);
+            var buildSettings = AddressableAssetSettings.Create(buildRoot, "AddressableAssetSettings", true, true);
 
             // Use a dedicated profile; point Build/Load to the absolute mod folder
-            var profiles = tempSettings.profileSettings;
-            var profileId = tempSettings.activeProfileId;
+            var profiles = buildSettings.profileSettings;
+            var profileId = buildSettings.activeProfileId;
             if (string.IsNullOrEmpty(profileId)) profileId = profiles.AddProfile("Mod", null);
-            tempSettings.activeProfileId = profileId;
+            buildSettings.activeProfileId = profileId;
 
             var modRoot = outDir.Replace('\\','/');
             if (string.IsNullOrEmpty(profiles.GetValueByName(profileId, AddressableAssetSettings.kLocalBuildPath)))
@@ -650,30 +762,30 @@ public class ModSDKWindow : EditorWindow
             update.StaticContent = false;
             schemas.Add(update);
 
-            var modGroup = tempSettings.CreateGroup("ModContent", false, false, false, schemas,
+            var modGroup = buildSettings.CreateGroup("ModContent", false, false, false, schemas,
                 typeof(BundledAssetGroupSchema), typeof(ContentUpdateGroupSchema));
-            tempSettings.DefaultGroup = modGroup;
+            buildSettings.DefaultGroup = modGroup;
 
             string modLabel = $"mod:{San(modName)}";
             foreach (var e in sourceGroup.entries.ToList())
             {
                 if (e == null) continue;
                 if (!(e.labels != null && e.labels.Contains(modLabel))) continue;
-                var entry = tempSettings.CreateOrMoveEntry(e.guid, modGroup);
+                var entry = buildSettings.CreateOrMoveEntry(e.guid, modGroup);
                 entry.SetAddress(e.address);
             }
 
-            bundled.BuildPath.SetVariableByName(tempSettings, AddressableAssetSettings.kLocalBuildPath);
-            bundled.LoadPath.SetVariableByName(tempSettings, AddressableAssetSettings.kLocalLoadPath);
+            bundled.BuildPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalBuildPath);
+            bundled.LoadPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalLoadPath);
 
             // Ensure a Player data builder exists and is active (Packed Mode)
-            var builderPath = Path.Combine(tempRoot, "BuildScriptPackedMode.asset");
+            var builderPath = Path.Combine(buildRoot, "BuildScriptPackedMode.asset");
             var packedBuilder = ScriptableObject.CreateInstance<BuildScriptPackedMode>();
             AssetDatabase.CreateAsset(packedBuilder, builderPath);
-            tempSettings.AddDataBuilder(packedBuilder);
-            tempSettings.ActivePlayerDataBuilderIndex = tempSettings.DataBuilders.IndexOf(packedBuilder);
+            buildSettings.AddDataBuilder(packedBuilder);
+            buildSettings.ActivePlayerDataBuilderIndex = buildSettings.DataBuilders.IndexOf(packedBuilder);
             // PlayMode builder is irrelevant here but set to a sane default
-            tempSettings.ActivePlayModeDataBuilderIndex = tempSettings.ActivePlayerDataBuilderIndex;
+            buildSettings.ActivePlayModeDataBuilderIndex = buildSettings.ActivePlayerDataBuilderIndex;
 
             AssetDatabase.SaveAssets();
 
@@ -683,7 +795,7 @@ public class ModSDKWindow : EditorWindow
             var defaultObjDir = Path.Combine("Assets", "AddressableAssetsData");
             bool createdDefaultDir = false;
             if (!Directory.Exists(defaultObjDir)) { Directory.CreateDirectory(defaultObjDir); createdDefaultDir = true; AssetDatabase.Refresh(); }
-            AddressableAssetSettingsDefaultObject.Settings = tempSettings;
+            AddressableAssetSettingsDefaultObject.Settings = buildSettings;
 
             try
             {
@@ -704,7 +816,7 @@ public class ModSDKWindow : EditorWindow
 
             // Post-build: copy ONLY the per‑mod catalog from the temp build path → outDir
             var platform = PlatformMappingService.GetPlatformPathSubFolder();
-            var tempBuildPath = ResolveProfilePath(tempSettings, AddressableAssetSettings.kLocalBuildPath, platform);
+            var tempBuildPath = ResolveProfilePath(buildSettings, AddressableAssetSettings.kLocalBuildPath, platform);
             // Clean old catalogs to avoid picking up a platform catalog with StreamingAssets paths
             foreach (var old in Directory.GetFiles(outDir, "catalog*.*", SearchOption.AllDirectories))
             {
@@ -747,13 +859,15 @@ public class ModSDKWindow : EditorWindow
             }
 
             // Quick check: report expected load path and whether a catalog is present
-            var expectedLoadPath = bundled.LoadPath.GetValue(tempSettings);
+            var expectedLoadPath = bundled.LoadPath.GetValue(buildSettings);
             var catalogs = Directory.GetFiles(outDir, "catalog*.*", SearchOption.AllDirectories).Length;
             Debug.Log($"[ModSDK] Per-mod catalog built. Expected LoadPath='{expectedLoadPath}'. Catalog files in outDir: {catalogs} (copied {copiedCatalogs}). Folder: {outDir}");
             EditorUtility.RevealInFinder(outDir);
 
             // Tokenize absolute InternalIds to {ModRoot} so they resolve on player machines
             PostprocessCatalogTokenize(outDir);
+            // Optional: clean the transient build settings folder to avoid confusion
+            try { AssetDatabase.DeleteAsset(buildRoot); } catch { }
         }
         catch (Exception ex)
         {
