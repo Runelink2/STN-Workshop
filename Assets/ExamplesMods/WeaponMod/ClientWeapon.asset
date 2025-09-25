@@ -1,0 +1,82 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -1744545459, guid: cf7ea8c496c53494fb40596cec5ea775, type: 3}
+  m_Name: ClientWeapon
+  m_EditorClassIdentifier: 
+  force: 1000
+  visualFireRate: -9999
+  burstFire: 0
+  standardSpread: -9999
+  standardSpreadRate: -9999
+  spDecRate: -9999
+  maxSpread: -9999
+  aimSpread: -9999
+  aimSpreadRate: -9999
+  crouchSpreadModifier: -9999
+  proneSpreadModifier: -9999
+  moveSpreadModifier: -9999
+  kickbackAngle: -9999
+  xKickbackFactor: -9999
+  maxKickback: -9999
+  recoilDelay: -9999
+  kickbackAim: -9999
+  crouchKickbackMod: -9999
+  moveKickbackMod: -9999
+  range: -9999
+  autoFire: 0
+  burstCount: -9999
+  burstTime: -9999
+  delay: -9999
+  timeToIdle: -9999
+  takeOutTime: -9999
+  putAwayTime: -9999
+  jamLength: -9999
+  cleanLength: -9999
+  progressiveReload: 0
+  lastRoundFiredReloadTime: -9999
+  emptyReloadTime: -9999
+  waitforReload: -9999
+  reloadInTime: -9999
+  reloadOutTime: -9999
+  partReloadTime: -9999
+  emptyGunOneBulletReloadTime: -9999
+  traceEvery: -9999
+  simulateTime: -9999
+  firePitch: -9999
+  fireVolume: -9999
+  emptyVolume: -9999
+  reloadVolumes: -9999
+  jamVolume: -9999
+  cleanVolume: -9999
+  overwriteSway: 0
+  moveSwayRate: {x: -9999, y: -9999}
+  moveSwayAmplitude: {x: -9999, y: -9999}
+  runSwayRate: {x: -9999, y: -9999}
+  runAmplitude: {x: -9999, y: -9999}
+  idleSwayRate: {x: -9999, y: -9999}
+  idleAmplitude: {x: -9999, y: -9999}
+  useZKickBack: 0
+  kickBackZ: -9999
+  zRetRate: -9999
+  maxZ: -9999
+  overrideAvoidance: 0
+  avoids: 0
+  dist: -9999
+  minDist: -9999
+  shootsProjectiles: 0
+  initialSpeed: -9999
+  projectileCount: -9999
+  launchAngle: -9999
+  isHoldDownWeapon: 0
+  holdDownCameraShake: -9999
+  shellEjection: 0
+  ejectDelay: -9999
