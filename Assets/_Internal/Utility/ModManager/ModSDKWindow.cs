@@ -40,6 +40,10 @@ public class ModSDKWindow : EditorWindow
         private Vector2 scrollOverrides;
         private string searchOverrides = "";
 
+	// ---------- Working root (configurable) ----------
+	private const string DefaultWorkingRootName = "My_Mods";
+	private const string LegacyWorkingRootName = "_ModSDK_Temp";
+
     // ---------- Menu ----------
     [MenuItem("Modding/Open Mod SDK")]
     public static void Open() => GetWindow<ModSDKWindow>("Mod SDK");
@@ -63,7 +67,7 @@ public class ModSDKWindow : EditorWindow
                         if (!string.IsNullOrEmpty(dir)) targetDir = dir;
                     }
                 }
-            }
+                }
             var defaultPath = System.IO.Path.Combine(targetDir, "ClientWeapon.asset");
             defaultPath = AssetDatabase.GenerateUniqueAssetPath(defaultPath);
 
@@ -93,51 +97,105 @@ public class ModSDKWindow : EditorWindow
         EditorGUILayout.LabelField("Mod SDK", EditorStyles.boldLabel);
         EditorGUILayout.Space(4);
 
-        // Config
-        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-        {
-            modName    = EditorGUILayout.TextField("Mod Name", modName);
-            modVersion = EditorGUILayout.TextField("Mod Version", modVersion);
-            EditorGUILayout.LabelField("Public Metadata (JSON)", publicJsonPath);
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
-                EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
-                if (GUILayout.Button("Choose…", GUILayout.Width(80)))
-                {
-                    var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
-                    var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
-                    if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
-                }
-            }
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button(new GUIContent("Load Mod (Temp)…", "Pick an existing per‑mod settings folder under _ModSDK_Temp"), GUILayout.Width(160)))
-                {
-                    var baseTemp = Path.Combine(Application.dataPath, "_ModSDK_Temp");
-                    Directory.CreateDirectory(baseTemp);
-                    var picked = EditorUtility.OpenFolderPanel("Select Mod Settings Folder", baseTemp, "");
-                    if (!string.IsNullOrEmpty(picked))
-                    {
-                        var hasSettings = File.Exists(Path.Combine(picked, "AddressableAssetSettings.asset"));
-                        if (hasSettings)
-                        {
-                            modName = San(new DirectoryInfo(picked).Name);
-                            Repaint();
-                        }
-                        else
-                        {
-                            EditorUtility.DisplayDialog("Not a Mod Settings Folder", "The selected folder does not contain AddressableAssetSettings.asset.", "OK");
-                        }
-                    }
-                }
-                if (GUILayout.Button(new GUIContent("Create Mod", "Create per‑mod Addressables settings in _ModSDK_Temp/<ModName>"), GUILayout.Width(120)))
-                {
-                    var newName = San(string.IsNullOrEmpty(modName) ? "MyMod" : modName);
-                    modName = newName;
-                    var settings = GetOrCreatePerModSettings();
-                    if (settings != null)
-                    {
+		// Config
+		using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+		{
+			// Two-column flow: Load Existing vs Create New
+			using (new EditorGUILayout.HorizontalScope())
+			{
+				// Load Existing Mod
+				using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+				{
+					EditorGUILayout.LabelField("Load Existing Mod", EditorStyles.boldLabel);
+					var mods = GetAvailableModNames();
+					using (new EditorGUILayout.HorizontalScope())
+					{
+						EditorGUILayout.LabelField(new GUIContent("Available Mods", $"Detected mod working folders under {DefaultWorkingRootName} (and legacy)"), GUILayout.Width(120));
+						if (mods.Count == 0)
+						{
+							EditorGUILayout.LabelField($"(none)", EditorStyles.miniLabel, GUILayout.Width(140));
+							if (GUILayout.Button("Reveal", GUILayout.Width(64)))
+							{
+								var abs = GetAbsoluteFilePath(Path.Combine("Assets", DefaultWorkingRootName));
+								if (!string.IsNullOrEmpty(abs))
+								{
+									if (!Directory.Exists(abs)) Directory.CreateDirectory(abs);
+									EditorUtility.RevealInFinder(abs);
+								}
+							}
+						}
+						else
+						{
+							var current = San(modName);
+							var idx = Mathf.Max(0, mods.IndexOf(current));
+							var newIdx = EditorGUILayout.Popup(idx, mods.ToArray(), GUILayout.Width(220));
+							var selectedMod = mods[Mathf.Clamp(newIdx, 0, mods.Count - 1)];
+							if (newIdx != idx && newIdx >= 0 && newIdx < mods.Count)
+							{
+								modName = selectedMod;
+								Repaint();
+							}
+							if (GUILayout.Button("Load", GUILayout.Width(56)))
+							{
+								modName = selectedMod;
+								Repaint();
+							}
+							if (GUILayout.Button("Reveal", GUILayout.Width(64)))
+							{
+								var newPath = Path.Combine(GetWorkingRootAssetPath(), selectedMod);
+								var legacyPath = Path.Combine(LegacyRootAssetPath(), selectedMod);
+								var newAbs = GetAbsoluteFilePath(newPath);
+								var legacyAbs = GetAbsoluteFilePath(legacyPath);
+								string target = null;
+								if (!string.IsNullOrEmpty(newAbs) && Directory.Exists(newAbs)) target = newAbs;
+								else if (!string.IsNullOrEmpty(legacyAbs) && Directory.Exists(legacyAbs)) target = legacyAbs;
+								else target = newAbs ?? legacyAbs;
+								if (!string.IsNullOrEmpty(target)) EditorUtility.RevealInFinder(target);
+							}
+						}
+					}
+					using (new EditorGUILayout.HorizontalScope())
+					{
+						if (GUILayout.Button(new GUIContent("Load From Folder…", $"Pick a working folder under Assets/{DefaultWorkingRootName} (or legacy)"), GUILayout.Width(220)))
+						{
+							var preferred = Path.Combine(Application.dataPath, San(DefaultWorkingRootName));
+							var legacy = Path.Combine(Application.dataPath, LegacyWorkingRootName);
+							var baseTemp = Directory.Exists(preferred) ? preferred : legacy;
+							Directory.CreateDirectory(baseTemp);
+							var picked = EditorUtility.OpenFolderPanel("Select Mod Working Folder", baseTemp, "");
+							if (!string.IsNullOrEmpty(picked))
+							{
+								var hasSettings = File.Exists(Path.Combine(picked, "AddressableAssetSettings.asset"));
+								if (hasSettings)
+								{
+									modName = San(new DirectoryInfo(picked).Name);
+									Repaint();
+								}
+								else
+								{
+									EditorUtility.DisplayDialog("Not a Mod Settings Folder", "The selected folder does not contain AddressableAssetSettings.asset.", "OK");
+								}
+							}
+					}
+					}
+				}
+
+				// Create New Mod
+				using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+				{
+					EditorGUILayout.LabelField("Create New Mod", EditorStyles.boldLabel);
+					modName    = EditorGUILayout.TextField("Mod Name", modName);
+					modVersion = EditorGUILayout.TextField("Mod Version", modVersion);
+					using (new EditorGUILayout.HorizontalScope())
+					{
+						GUILayout.FlexibleSpace();
+						if (GUILayout.Button(new GUIContent("Create Mod", $"Create per‑mod working folder and Addressables settings in {DefaultWorkingRootName}/<ModName>"), GUILayout.Width(160)))
+						{
+							var newName = San(string.IsNullOrEmpty(modName) ? "MyMod" : modName);
+							modName = newName;
+							var settings = GetOrCreatePerModSettings();
+							if (settings != null)
+							{
                         // Ensure our working group exists and has required schemas
                         var group = EnsureGroup(settings, targetGroupName);
                         var bundled = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();
@@ -147,40 +205,72 @@ public class ModSDKWindow : EditorWindow
                         update.StaticContent = false;
 
                         // Create and set a local profile that points to a dummy path under the mod temp (not used for build output)
-                        var profiles = settings.profileSettings;
-                        var profileId = settings.activeProfileId;
-                        if (string.IsNullOrEmpty(profileId)) profileId = profiles.AddProfile("Mod", null);
-                        settings.activeProfileId = profileId;
-                        var modTempRoot = Path.Combine("Assets", "_ModSDK_Temp", newName).Replace('\\','/');
+						var profiles = settings.profileSettings;
+						var profileId = settings.activeProfileId;
+						if (string.IsNullOrEmpty(profileId)) profileId = profiles.AddProfile("Mod", null);
+						settings.activeProfileId = profileId;
+						var modTempRoot = Path.Combine(GetWorkingRootAssetPath(), newName).Replace('\\','/');
                         EnsureProfileVariable(settings, AddressableAssetSettings.kLocalBuildPath, modTempRoot);
                         EnsureProfileVariable(settings, AddressableAssetSettings.kLocalLoadPath, modTempRoot);
                         bundled.BuildPath.SetVariableByName(settings, AddressableAssetSettings.kLocalBuildPath);
                         bundled.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kLocalLoadPath);
                         settings.SetDirty(AddressableAssetSettings.ModificationEvent.GroupSchemaModified, group, true, false);
                         AssetDatabase.SaveAssets();
-                        Debug.Log($"[ModSDK] Mod context ready: '{newName}' → Assets/_ModSDK_Temp/{newName}");
-                    }
-                }
-                GUILayout.FlexibleSpace();
-            }
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("Reload")) LoadPublicAddresses();
-                if (GUILayout.Button("Reveal File"))
-                {
-                    var abs = GetAbsoluteFilePath(publicJsonPath);
-                    if (!string.IsNullOrEmpty(abs))
-                    {
-                        if (File.Exists(abs)) EditorUtility.RevealInFinder(abs);
-                        else EditorUtility.RevealInFinder(Path.GetDirectoryName(abs));
-                    }
-                }
-            }
+						Debug.Log($"[ModSDK] Mod context ready: '{newName}' → {GetWorkingRootAssetPath()}/{newName}");
+					}
+				}
+				GUILayout.FlexibleSpace();
+			}
+		}
+		}
+			using (new EditorGUILayout.HorizontalScope())
+			{
+				if (GUILayout.Button("Reload")) LoadPublicAddresses();
+				if (GUILayout.Button("Reveal File"))
+				{
+					var abs = GetAbsoluteFilePath(publicJsonPath);
+					if (!string.IsNullOrEmpty(abs))
+					{
+						if (File.Exists(abs)) EditorUtility.RevealInFinder(abs);
+						else EditorUtility.RevealInFinder(Path.GetDirectoryName(abs));
+					}
+				}
+			}
+			// Active mod status
+			EditorGUILayout.Space(4);
+			{
+				var activeNew = Path.Combine(GetWorkingRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+				var activeLegacy = Path.Combine(LegacyRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+				bool activeInNew = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeNew) != null;
+				bool activeInLegacy = !activeInNew && AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeLegacy) != null;
+				bool hasActive = activeInNew || activeInLegacy;
+				using (new EditorGUILayout.HorizontalScope())
+				{
+					if (hasActive)
+					{
+						var root = activeInNew ? GetWorkingRootAssetPath() : LegacyRootAssetPath();
+						var folderAsset = Path.Combine(root, San(modName));
+						EditorGUILayout.LabelField($"Active Mod: {San(modName)}  —  {folderAsset}", EditorStyles.boldLabel);
+						GUILayout.FlexibleSpace();
+						if (GUILayout.Button("Reveal Mod Folder", GUILayout.Width(140)))
+						{
+							var abs = GetAbsoluteFilePath(folderAsset);
+							if (!string.IsNullOrEmpty(abs)) EditorUtility.RevealInFinder(abs);
+						}
+					}
+					else
+					{
+						EditorGUILayout.LabelField("Active Mod: (none)", EditorStyles.miniBoldLabel);
+					}
+				}
+			}
         }
 
-        // Gate the rest of the UI until a mod context is selected/available
-        var perModSettingsPath = Path.Combine("Assets", "_ModSDK_Temp", San(modName), "AddressableAssetSettings.asset");
-        bool hasModContext = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(perModSettingsPath) != null;
+		// Gate the rest of the UI until a mod context is selected/available
+		var perModSettingsPathNew = Path.Combine(GetWorkingRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+		var perModSettingsPathLegacy = Path.Combine(LegacyRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+		bool hasModContext = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(perModSettingsPathNew) != null ||
+			AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(perModSettingsPathLegacy) != null;
         if (!hasModContext)
         {
             EditorGUILayout.Space(6);
@@ -304,6 +394,17 @@ public class ModSDKWindow : EditorWindow
         EditorGUILayout.LabelField("3) Build mod package", EditorStyles.boldLabel);
         using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
         {
+			using (new EditorGUILayout.HorizontalScope())
+			{
+				EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
+				EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
+				if (GUILayout.Button("Choose…", GUILayout.Width(80)))
+				{
+					var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
+					var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
+					if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
+				}
+			}
             if (GUILayout.Button("Build Mod"))
                 BuildMod();
             EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
@@ -730,8 +831,8 @@ public class ModSDKWindow : EditorWindow
             catch { /* ignore, recreate below */ }
             Directory.CreateDirectory(outDir);
 
-            // Build uses an isolated copy of Addressables settings so working assignments remain intact
-            var mainRoot = Path.Combine("Assets", "_ModSDK_Temp", San(modName));
+			// Build uses an isolated copy of Addressables settings so working assignments remain intact
+			var mainRoot = Path.Combine(GetWorkingRootAssetPath(), San(modName));
             Directory.CreateDirectory(mainRoot);
             var buildRoot = Path.Combine(mainRoot, "BuildTemp");
             try { if (Directory.Exists(buildRoot)) Directory.Delete(buildRoot, true); } catch { }
@@ -876,25 +977,42 @@ public class ModSDKWindow : EditorWindow
     }
 
     // ---------- Helpers: per‑mod Addressables settings ----------
-    private AddressableAssetSettings GetOrCreatePerModSettings()
+	private AddressableAssetSettings GetOrCreatePerModSettings()
     {
-        try
+		try
         {
-            var root = Path.Combine("Assets", "_ModSDK_Temp", San(modName));
-            Directory.CreateDirectory(root);
-            var assetPath = Path.Combine(root, "AddressableAssetSettings.asset");
-            var settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(assetPath);
-            if (settings == null)
-            {
-                // Persist the settings asset so the folder is not empty and can be reloaded later
-                settings = AddressableAssetSettings.Create(root, "AddressableAssetSettings", true, true);
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
-            }
-            return settings;
+			var newRoot = Path.Combine(GetWorkingRootAssetPath(), San(modName));
+			var legacyRoot = Path.Combine(LegacyRootAssetPath(), San(modName));
+			var newAssetPath = Path.Combine(newRoot, "AddressableAssetSettings.asset");
+			var legacyAssetPath = Path.Combine(legacyRoot, "AddressableAssetSettings.asset");
+
+			// Prefer new location; if not found, try legacy; if neither, create under new
+			var settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(newAssetPath);
+			if (settings == null)
+				settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(legacyAssetPath);
+
+			if (settings == null)
+			{
+				Directory.CreateDirectory(newRoot);
+				settings = AddressableAssetSettings.Create(newRoot, "AddressableAssetSettings", true, true);
+				AssetDatabase.SaveAssets();
+				AssetDatabase.Refresh();
+			}
+			return settings;
         }
         catch { return AddressableAssetSettingsDefaultObject.Settings; }
     }
+
+	private string GetWorkingRootAssetPath()
+	{
+		var name = San(DefaultWorkingRootName);
+		return Path.Combine("Assets", name);
+	}
+
+	private string LegacyRootAssetPath()
+	{
+		return Path.Combine("Assets", LegacyWorkingRootName);
+	}
 
     private static void PostprocessCatalogTokenize(string outDir)
     {
@@ -1056,6 +1174,44 @@ public class ModSDKWindow : EditorWindow
         if (string.IsNullOrEmpty(existing)) profiles.CreateValue(name, value);
         profiles.SetValue(settings.activeProfileId, name, value);
     }
+
+	private List<string> GetAvailableModNames()
+	{
+		var list = new List<string>();
+		try
+		{
+			void Scan(string assetRoot)
+			{
+				if (string.IsNullOrEmpty(assetRoot)) return;
+				var abs = GetAbsoluteFilePath(assetRoot);
+				if (string.IsNullOrEmpty(abs) || !Directory.Exists(abs)) return;
+				foreach (var dir in Directory.GetDirectories(abs))
+				{
+					var name = Path.GetFileName(dir);
+					var hasSettings = File.Exists(Path.Combine(dir, "AddressableAssetSettings.asset"));
+					if (hasSettings) list.Add(San(name));
+				}
+			}
+
+			// Prefer new root, then add legacy ones not already included
+			Scan(GetWorkingRootAssetPath());
+			var before = new HashSet<string>(list, StringComparer.Ordinal);
+			var legacyRoot = LegacyRootAssetPath();
+			var legacyAbs = GetAbsoluteFilePath(legacyRoot);
+			if (!string.IsNullOrEmpty(legacyAbs) && Directory.Exists(legacyAbs))
+			{
+				foreach (var dir in Directory.GetDirectories(legacyAbs))
+				{
+					var name = San(Path.GetFileName(dir));
+					var hasSettings = File.Exists(Path.Combine(dir, "AddressableAssetSettings.asset"));
+					if (hasSettings && !before.Contains(name)) list.Add(name);
+				}
+			}
+		}
+		catch { }
+		list.Sort(StringComparer.OrdinalIgnoreCase);
+		return list;
+	}
 
     // Super small JSON reader for the simple array we export (avoids extra deps)
     private List<PublicEntry> MiniJsonList(string json)
