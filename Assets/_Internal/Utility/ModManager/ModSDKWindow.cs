@@ -25,8 +25,9 @@ public class ModSDKWindow : EditorWindow
     private PublicCatalog publicCatalog = new PublicCatalog();
     private string publicJsonPath = DefaultPublicJsonPath;
 
-    private string modName = "MyMod";
-    private string modVersion = "1.0.0";
+    private string modName = "MyMod";            // Active mod context
+    private string newModName = "MyMod";         // Name used in Create New Mod UI only
+    private string modVersion = "1.0.0";         // Version used when building (user-provided)
     private string targetGroupName = "Mod_PublicAssets";
     private string search = "";
     private string modOutputDir = ""; // absolute folder where per-mod catalog/bundles are written
@@ -39,10 +40,29 @@ public class ModSDKWindow : EditorWindow
     private Vector2 scrollValidate;
         private Vector2 scrollOverrides;
         private string searchOverrides = "";
+		private HashSet<string> overridesExpanded = new HashSet<string>();
+		private static readonly Color TintOverride = new Color(0.45f, 1.00f, 0.45f, 1f);
+		private static readonly Color TintSelected = new Color(1.00f, 0.85f, 0.35f, 1f);
 
 	// ---------- Working root (configurable) ----------
 	private const string DefaultWorkingRootName = "My_Mods";
 	private const string LegacyWorkingRootName = "_ModSDK_Temp";
+
+	// ---------- Caches / perf ----------
+	// Public list versioning (bumped when JSON is reloaded)
+	private int publicVersion = 0;
+	// Cache for filtered list + built tree
+	private string cacheSearch = "";
+	private string cacheLabel = "";
+	private string cacheFolder = "";
+	private int cacheVersion = -1;
+	private List<PublicEntry> cacheFiltered = null;
+	private TreeNode cacheRoot = null;
+	// Cache for override map (Addressables); throttled
+	private Dictionary<string, string> cachedOverrideMap = null;
+	private double lastOverrideRefresh = -1;
+	private string cachedOverrideForMod = null;
+	private const double OverrideRefreshInterval = 0.35; // seconds
 
     // ---------- Menu ----------
     [MenuItem("Modding/Open Mod SDK")]
@@ -135,23 +155,15 @@ public class ModSDKWindow : EditorWindow
 								modName = selectedMod;
 								Repaint();
 							}
-							if (GUILayout.Button("Load", GUILayout.Width(56)))
+							if (GUILayout.Button("Refresh", GUILayout.Width(56)))
 							{
 								modName = selectedMod;
+								// Force override cache refresh so UI updates immediately
+								cachedOverrideMap = null;
+								lastOverrideRefresh = -1;
 								Repaint();
 							}
-							if (GUILayout.Button("Reveal", GUILayout.Width(64)))
-							{
-								var newPath = Path.Combine(GetWorkingRootAssetPath(), selectedMod);
-								var legacyPath = Path.Combine(LegacyRootAssetPath(), selectedMod);
-								var newAbs = GetAbsoluteFilePath(newPath);
-								var legacyAbs = GetAbsoluteFilePath(legacyPath);
-								string target = null;
-								if (!string.IsNullOrEmpty(newAbs) && Directory.Exists(newAbs)) target = newAbs;
-								else if (!string.IsNullOrEmpty(legacyAbs) && Directory.Exists(legacyAbs)) target = legacyAbs;
-								else target = newAbs ?? legacyAbs;
-								if (!string.IsNullOrEmpty(target)) EditorUtility.RevealInFinder(target);
-							}
+							// Reveal button removed; use "Reveal Mod Folder" in the status row below
 						}
 					}
 					using (new EditorGUILayout.HorizontalScope())
@@ -178,92 +190,150 @@ public class ModSDKWindow : EditorWindow
 							}
 					}
 					}
-				}
 
-				// Create New Mod
-				using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-				{
-					EditorGUILayout.LabelField("Create New Mod", EditorStyles.boldLabel);
-					modName    = EditorGUILayout.TextField("Mod Name", modName);
-					modVersion = EditorGUILayout.TextField("Mod Version", modVersion);
-					using (new EditorGUILayout.HorizontalScope())
+					EditorGUILayout.Space(2);
+					// Active mod status (moved here for clearer context)
 					{
-						GUILayout.FlexibleSpace();
-						if (GUILayout.Button(new GUIContent("Create Mod", $"Create per‑mod working folder and Addressables settings in {DefaultWorkingRootName}/<ModName>"), GUILayout.Width(160)))
+						var activeNew = Path.Combine(GetWorkingRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+						var activeLegacy = Path.Combine(LegacyRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+						bool activeInNew = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeNew) != null;
+						bool activeInLegacy = !activeInNew && AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeLegacy) != null;
+						bool hasActive = activeInNew || activeInLegacy;
+						using (new EditorGUILayout.HorizontalScope())
 						{
-							var newName = San(string.IsNullOrEmpty(modName) ? "MyMod" : modName);
-							modName = newName;
-							var settings = GetOrCreatePerModSettings();
-							if (settings != null)
+							if (hasActive)
 							{
-                        // Ensure our working group exists and has required schemas
-                        var group = EnsureGroup(settings, targetGroupName);
-                        var bundled = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();
-                        bundled.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
-                        bundled.BundleMode  = BundledAssetGroupSchema.BundlePackingMode.PackSeparately;
-                        var update = group.GetSchema<ContentUpdateGroupSchema>() ?? group.AddSchema<ContentUpdateGroupSchema>();
-                        update.StaticContent = false;
-
-                        // Create and set a local profile that points to a dummy path under the mod temp (not used for build output)
-						var profiles = settings.profileSettings;
-						var profileId = settings.activeProfileId;
-						if (string.IsNullOrEmpty(profileId)) profileId = profiles.AddProfile("Mod", null);
-						settings.activeProfileId = profileId;
-						var modTempRoot = Path.Combine(GetWorkingRootAssetPath(), newName).Replace('\\','/');
-                        EnsureProfileVariable(settings, AddressableAssetSettings.kLocalBuildPath, modTempRoot);
-                        EnsureProfileVariable(settings, AddressableAssetSettings.kLocalLoadPath, modTempRoot);
-                        bundled.BuildPath.SetVariableByName(settings, AddressableAssetSettings.kLocalBuildPath);
-                        bundled.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kLocalLoadPath);
-                        settings.SetDirty(AddressableAssetSettings.ModificationEvent.GroupSchemaModified, group, true, false);
-                        AssetDatabase.SaveAssets();
-						Debug.Log($"[ModSDK] Mod context ready: '{newName}' → {GetWorkingRootAssetPath()}/{newName}");
-					}
-				}
-				GUILayout.FlexibleSpace();
-			}
-		}
-		}
-			using (new EditorGUILayout.HorizontalScope())
-			{
-				if (GUILayout.Button("Reload")) LoadPublicAddresses();
-				if (GUILayout.Button("Reveal File"))
-				{
-					var abs = GetAbsoluteFilePath(publicJsonPath);
-					if (!string.IsNullOrEmpty(abs))
-					{
-						if (File.Exists(abs)) EditorUtility.RevealInFinder(abs);
-						else EditorUtility.RevealInFinder(Path.GetDirectoryName(abs));
-					}
-				}
-			}
-			// Active mod status
-			EditorGUILayout.Space(4);
-			{
-				var activeNew = Path.Combine(GetWorkingRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
-				var activeLegacy = Path.Combine(LegacyRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
-				bool activeInNew = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeNew) != null;
-				bool activeInLegacy = !activeInNew && AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeLegacy) != null;
-				bool hasActive = activeInNew || activeInLegacy;
-				using (new EditorGUILayout.HorizontalScope())
-				{
-					if (hasActive)
-					{
-						var root = activeInNew ? GetWorkingRootAssetPath() : LegacyRootAssetPath();
-						var folderAsset = Path.Combine(root, San(modName));
-						EditorGUILayout.LabelField($"Active Mod: {San(modName)}  —  {folderAsset}", EditorStyles.boldLabel);
-						GUILayout.FlexibleSpace();
-						if (GUILayout.Button("Reveal Mod Folder", GUILayout.Width(140)))
-						{
-							var abs = GetAbsoluteFilePath(folderAsset);
-							if (!string.IsNullOrEmpty(abs)) EditorUtility.RevealInFinder(abs);
+								var root = activeInNew ? GetWorkingRootAssetPath() : LegacyRootAssetPath();
+								var folderAsset = Path.Combine(root, San(modName));
+								EditorGUILayout.LabelField($"Active Mod: {folderAsset}", EditorStyles.miniBoldLabel);
+								//GUILayout.FlexibleSpace();
+								if (GUILayout.Button("Reveal Mod Folder", GUILayout.Width(140)))
+								{
+									var abs = GetAbsoluteFilePath(folderAsset);
+									if (!string.IsNullOrEmpty(abs)) EditorUtility.RevealInFinder(abs);
+								}
+							}
+							else
+							{
+								EditorGUILayout.LabelField("Active Mod: (none)", EditorStyles.miniBoldLabel);
+							}
 						}
 					}
-					else
+				}
+
+				// Create New Mod (left) + Public addresses metadata (right)
+				using (new EditorGUILayout.HorizontalScope())
+				{
+					// Left: Create New Mod
+					using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
 					{
-						EditorGUILayout.LabelField("Active Mod: (none)", EditorStyles.miniBoldLabel);
+						EditorGUILayout.LabelField("Create New Mod", EditorStyles.boldLabel);
+						newModName = EditorGUILayout.TextField("Mod Name", newModName);
+						modVersion = EditorGUILayout.TextField("Mod Version", modVersion);
+						using (new EditorGUILayout.HorizontalScope())
+						{
+							//GUILayout.FlexibleSpace();
+							if (GUILayout.Button(new GUIContent("Create Mod", $"Create per‑mod working folder and Addressables settings in {DefaultWorkingRootName}/<ModName>"), GUILayout.Width(160)))
+							{
+								var newName = San(string.IsNullOrEmpty(newModName) ? "MyMod" : newModName);
+								// If a mod with this name already exists, offer to switch or reveal instead of recreating
+								if (TryFindPerModSettings(newName, out var existingSettings, out var existingFolder))
+								{
+									var choice = EditorUtility.DisplayDialogComplex("Mod already exists",
+										$"A mod named '{newName}' already exists.",
+										"Switch to it",
+										"Cancel",
+										"Reveal Folder");
+									if (choice == 0)
+									{
+										modName = newName;
+										Repaint();
+									}
+									else if (choice == 2)
+									{
+										var abs = GetAbsoluteFilePath(existingFolder);
+										if (!string.IsNullOrEmpty(abs)) EditorUtility.RevealInFinder(abs);
+									}
+								}
+								else
+								{
+									var settings = GetOrCreatePerModSettingsFor(newName);
+									if (settings != null)
+									{
+									// Ensure our working group exists and has required schemas
+									var group = EnsureGroup(settings, targetGroupName);
+									var bundled = group.GetSchema<BundledAssetGroupSchema>() ?? group.AddSchema<BundledAssetGroupSchema>();
+									bundled.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+									bundled.BundleMode  = BundledAssetGroupSchema.BundlePackingMode.PackSeparately;
+									var update = group.GetSchema<ContentUpdateGroupSchema>() ?? group.AddSchema<ContentUpdateGroupSchema>();
+									update.StaticContent = false;
+
+									// Create and set a local profile that points to a dummy path under the mod temp (not used for build output)
+									var profiles = settings.profileSettings;
+									var profileId = settings.activeProfileId;
+									if (string.IsNullOrEmpty(profileId)) profileId = profiles.AddProfile("Mod", null);
+									settings.activeProfileId = profileId;
+									var modTempRoot = Path.Combine(GetWorkingRootAssetPath(), newName).Replace('\\','/');
+									EnsureProfileVariable(settings, AddressableAssetSettings.kLocalBuildPath, modTempRoot);
+									EnsureProfileVariable(settings, AddressableAssetSettings.kLocalLoadPath, modTempRoot);
+									bundled.BuildPath.SetVariableByName(settings, AddressableAssetSettings.kLocalBuildPath);
+									bundled.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kLocalLoadPath);
+									settings.SetDirty(AddressableAssetSettings.ModificationEvent.GroupSchemaModified, group, true, false);
+									AssetDatabase.SaveAssets();
+									Debug.Log($"[ModSDK] Mod context ready: '{newName}' → {GetWorkingRootAssetPath()}/{newName}");
+									// Offer to switch to the newly created mod
+									var after = EditorUtility.DisplayDialogComplex("Mod created",
+										$"Mod '{newName}' was created. Switch to it now?",
+										"Switch",
+										"Stay",
+										"Reveal Folder");
+									if (after == 0)
+									{
+										modName = newName;
+										Repaint();
+									}
+									else if (after == 2)
+									{
+										var folder = Path.Combine(GetWorkingRootAssetPath(), newName);
+										var abs = GetAbsoluteFilePath(folder);
+										if (!string.IsNullOrEmpty(abs)) EditorUtility.RevealInFinder(abs);
+									}
+								}
+							}
+							}
+							GUILayout.FlexibleSpace();
+						}
+					}
+
+					// Right: Public addresses metadata
+					using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Width(420)))
+					{
+						EditorGUILayout.LabelField("Public addresses metadata", EditorStyles.boldLabel);
+						using (new EditorGUILayout.HorizontalScope())
+						{
+							EditorGUILayout.LabelField(new GUIContent("JSON Path", "JSON file containing the game's public address list used for assignments"), GUILayout.Width(72));
+							EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(publicJsonPath) ? "(not set)" : publicJsonPath, GUILayout.Height(16), GUILayout.MaxWidth(340));
+						}
+						EditorGUILayout.HelpBox("This JSON lists public asset addresses, types, roles, and metadata that mods can use or override. Reload if the file changes.", MessageType.None);
+						using (new EditorGUILayout.HorizontalScope())
+						{
+							if (GUILayout.Button("Reload", GUILayout.Width(80))) LoadPublicAddresses();
+							if (GUILayout.Button("Reveal File", GUILayout.Width(90)))
+							{
+								var abs = GetAbsoluteFilePath(publicJsonPath);
+								if (!string.IsNullOrEmpty(abs))
+								{
+									if (File.Exists(abs)) EditorUtility.RevealInFinder(abs);
+									else EditorUtility.RevealInFinder(Path.GetDirectoryName(abs));
+								}
+							}
+							GUILayout.FlexibleSpace();
+						}
 					}
 				}
-			}
+		}
+			// (moved) Public addresses metadata now appears alongside Create New Mod above
+			// Active mod status moved above, alongside Load Existing
         }
 
 		// Gate the rest of the UI until a mod context is selected/available
@@ -278,136 +348,170 @@ public class ModSDKWindow : EditorWindow
             return;
         }
 
-        // ASSIGN
+        // ASSIGN + OVERRIDES side-by-side
         EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("1) Assign addresses to selected assets", EditorStyles.boldLabel);
-        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+		using (new EditorGUILayout.VerticalScope(GUILayout.ExpandHeight(true)))
+		using (new EditorGUILayout.HorizontalScope(GUILayout.ExpandHeight(true)))
         {
-            search = EditorGUILayout.TextField("Search addresses", search);
-            using (new EditorGUILayout.HorizontalScope())
+			// Fixed 50/50 split for left/right columns
+			var colWidth = Mathf.Max(120f, (position.width - 8f) * 0.5f);
+			// LEFT: Assign addresses
+			using (new EditorGUILayout.VerticalScope(GUILayout.Width(colWidth), GUILayout.ExpandHeight(true)))
             {
-                filterLabel = EditorGUILayout.TextField(new GUIContent("Label contains", "Filter entries whose labels contains this text"), filterLabel);
-                filterFolder = EditorGUILayout.TextField(new GUIContent("Folder prefix", "Filter entries whose address starts with this folder path/prefix"), filterFolder);
-            }
-            var filtered = FilterPublic(search, filterLabel, filterFolder);
-
-            EditorGUILayout.LabelField($"Matching: {filtered.Count} entries", EditorStyles.miniLabel);
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("Expand All", GUILayout.Width(100)))
-                    treeExpanded = new HashSet<string>(GetAllFolderPaths(filtered));
-                if (GUILayout.Button("Collapse All", GUILayout.Width(100)))
-                    treeExpanded.Clear();
-                GUILayout.FlexibleSpace();
-            }
-
-            scrollAssign = EditorGUILayout.BeginScrollView(scrollAssign, GUILayout.MinHeight(220), GUILayout.MaxHeight(360));
-            var root = BuildAddressTree(filtered);
-            var overrideMap = ComputeOverrideMap();
-            DrawAddressTree(root, 0, overrideMap);
-            EditorGUILayout.EndScrollView();
-
-            if (GUILayout.Button("Assign Selected To Highlighted"))
-            {
-                if (!string.IsNullOrEmpty(selectedAddress))
+                EditorGUILayout.LabelField("1) Assign addresses to selected assets", EditorStyles.boldLabel);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.ExpandHeight(true)))
                 {
-                    var entry = publicCatalog.entries.FirstOrDefault(e => string.Equals(e.address, selectedAddress, StringComparison.Ordinal));
-                    if (entry != null) AssignSelectedToAddress(entry);
-                    else Debug.LogWarning("Selected address not found.");
-                }
-                else Debug.LogWarning("Select an address from the list first.");
-            }
-
-            EditorGUILayout.HelpBox("Tip: select your asset(s) in Project, filter then browse like folders and click an address to select it.", MessageType.None);
-        }
-
-        // OVERRIDES BROWSER
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("Current overrides in this mod", EditorStyles.boldLabel);
-        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-        {
-            searchOverrides = EditorGUILayout.TextField("Search", searchOverrides);
-            var overrides = ComputeOverrideMap();
-            if (!string.IsNullOrEmpty(searchOverrides))
-            {
-                var q = searchOverrides.Trim().ToLowerInvariant();
-                overrides = overrides
-                    .Where(kv => (kv.Key ?? "").ToLowerInvariant().Contains(q) || (kv.Value ?? "").ToLowerInvariant().Contains(q))
-                    .ToDictionary(k => k.Key, v => v.Value);
-            }
-            EditorGUILayout.LabelField($"Matching: {overrides.Count} overrides", EditorStyles.miniLabel);
-
-            scrollOverrides = EditorGUILayout.BeginScrollView(scrollOverrides, GUILayout.MinHeight(120), GUILayout.MaxHeight(260));
-            foreach (var kv in overrides.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
-            {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    bool isSel = string.Equals(selectedAddress, kv.Key, StringComparison.Ordinal);
-                    var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
-                    if (GUILayout.Button(new GUIContent(kv.Key), style, GUILayout.ExpandWidth(true)))
-                        selectedAddress = kv.Key;
-                    GUILayout.FlexibleSpace();
-                    var right = new GUIContent("→ " + CompactAssetPath(kv.Value), kv.Value);
-                    EditorGUILayout.LabelField(right, EditorStyles.miniLabel, GUILayout.ExpandWidth(false));
-                    if (GUILayout.Button("Ping", GUILayout.Width(44)))
+                    search = EditorGUILayout.TextField("Search addresses", search);
+                    using (new EditorGUILayout.HorizontalScope())
                     {
-                        var obj = AssetDatabase.LoadAssetAtPath<Object>(kv.Value);
-                        if (obj != null) EditorGUIUtility.PingObject(obj);
+                        filterLabel = EditorGUILayout.TextField(new GUIContent("Label contains", "Filter entries whose labels contains this text"), filterLabel);
+                        filterFolder = EditorGUILayout.TextField(new GUIContent("Folder prefix", "Filter entries whose address starts with this folder path/prefix"), filterFolder);
                     }
-                    if (GUILayout.Button("Select", GUILayout.Width(56)))
+
+                    EnsureFilteredTreeUpToDate();
+                    var filtered = cacheFiltered ?? new List<PublicEntry>();
+
+                    // Compute overrides info for controls and rendering
+                    var overrideMap = GetOverrideMapCached();
+                    var overrideFolders = GetOverrideFolderSet(overrideMap);
+
+                    EditorGUILayout.LabelField($"Matching: {filtered.Count} entries", EditorStyles.miniLabel);
+                    using (new EditorGUILayout.HorizontalScope())
                     {
-                        var obj = AssetDatabase.LoadAssetAtPath<Object>(kv.Value);
-                        if (obj != null) Selection.activeObject = obj;
+                        if (GUILayout.Button("Expand All", GUILayout.Width(100)))
+                            treeExpanded = new HashSet<string>(GetAllFolderPaths(filtered));
+                        if (GUILayout.Button("Expand Overrides", GUILayout.Width(140)))
+                            treeExpanded = new HashSet<string>(overrideFolders);
+                        if (GUILayout.Button("Collapse All", GUILayout.Width(100)))
+                            treeExpanded.Clear();
+                        GUILayout.FlexibleSpace();
                     }
+
+                    using (new EditorGUILayout.VerticalScope(GUILayout.ExpandHeight(true)))
+                    {
+                        scrollAssign = EditorGUILayout.BeginScrollView(scrollAssign, GUILayout.ExpandHeight(true));
+                        var root = cacheRoot ?? BuildAddressTree(filtered);
+                        DrawAddressTree(root, 0, overrideMap, overrideFolders);
+                        EditorGUILayout.EndScrollView();
+                    }
+
+                    if (GUILayout.Button("Assign Selected To Highlighted"))
+                    {
+                        if (!string.IsNullOrEmpty(selectedAddress))
+                        {
+                            var entry = publicCatalog.entries.FirstOrDefault(e => string.Equals(e.address, selectedAddress, StringComparison.Ordinal));
+                            if (entry != null) AssignSelectedToAddress(entry);
+                            else Debug.LogWarning("Selected address not found.");
+                        }
+                        else Debug.LogWarning("Select an address from the list first.");
+                    }
+
+                    EditorGUILayout.HelpBox("Tip: select your asset(s) in Project, filter then browse like folders and click an address to select it.", MessageType.None);
                 }
             }
-            EditorGUILayout.EndScrollView();
-            if (overrides.Count == 0)
-                EditorGUILayout.HelpBox("No overrides found for this mod.", MessageType.Info);
-        }
 
-        // VALIDATE
-        EditorGUILayout.Space(8);
-        EditorGUILayout.LabelField("2) Validate mod", EditorStyles.boldLabel);
-        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-        {
-            if (GUILayout.Button("Run Validation"))
+
+			// RIGHT: Current overrides
+			using (new EditorGUILayout.VerticalScope(GUILayout.Width(colWidth), GUILayout.ExpandHeight(true)))
             {
-                if (ValidateMod(out var issues))
+                EditorGUILayout.LabelField("Current overrides in this mod", EditorStyles.boldLabel);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.ExpandHeight(true)))
                 {
-                    EditorUtility.DisplayDialog("Validation", "Validation passed.", "OK");
-                }
-                else
-                {
-                    var msg = issues != null && issues.Count > 0 ? ("Found " + issues.Count + " issue(s). See Console for details.") : "Validation failed.";
-                    Debug.LogWarning(issues != null && issues.Count > 0 ? "[ModSDK] Validation issues:\n - " + string.Join("\n - ", issues) : "[ModSDK] Validation failed.");
-                    EditorUtility.DisplayDialog("Validation failed", msg, "OK");
+                    searchOverrides = EditorGUILayout.TextField("Search", searchOverrides);
+                    var overrides = GetOverrideMapCached();
+                    if (!string.IsNullOrEmpty(searchOverrides))
+                    {
+                        var q = searchOverrides.Trim().ToLowerInvariant();
+                        overrides = overrides
+                            .Where(kv => (kv.Key ?? "").ToLowerInvariant().Contains(q) || (kv.Value ?? "").ToLowerInvariant().Contains(q))
+                            .ToDictionary(k => k.Key, v => v.Value);
+                    }
+                    EditorGUILayout.LabelField($"Matching: {overrides.Count} overrides", EditorStyles.miniLabel);
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        if (GUILayout.Button("Expand All", GUILayout.Width(100)))
+                        {
+                            overridesExpanded = new HashSet<string>(GetOverrideFolderSet(overrides));
+                        }
+                        if (GUILayout.Button("Collapse All", GUILayout.Width(100)))
+                        {
+                            overridesExpanded.Clear();
+                        }
+                        GUILayout.FlexibleSpace();
+                    }
+
+                    using (new EditorGUILayout.VerticalScope(GUILayout.ExpandHeight(true)))
+                    {
+                        scrollOverrides = EditorGUILayout.BeginScrollView(scrollOverrides, GUILayout.ExpandHeight(true));
+
+                        // Build a folder tree from override addresses
+                        var overrideEntries = overrides
+                            .Select(kv => new PublicEntry { address = kv.Key, type = "", role = "", labels = "", meta = kv.Value })
+                            .ToList();
+                        var oRoot = BuildAddressTree(overrideEntries);
+                        DrawOverridesTree(oRoot, 0, overrides);
+
+                        EditorGUILayout.EndScrollView();
+                    }
+                    if (overrides.Count == 0)
+                        EditorGUILayout.HelpBox("No overrides found for this mod.", MessageType.Info);
                 }
             }
-            scrollValidate = EditorGUILayout.BeginScrollView(scrollValidate, GUILayout.MinHeight(80), GUILayout.MaxHeight(180));
-            EditorGUILayout.EndScrollView();
-            EditorGUILayout.HelpBox("Checks: duplicates, spaces in addresses, type mismatches vs. public list, non-public overrides.", MessageType.None);
         }
 
-        // BUILD
+        // VALIDATE + BUILD side-by-side
         EditorGUILayout.Space(8);
-        EditorGUILayout.LabelField("3) Build mod package", EditorStyles.boldLabel);
-        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+        using (new EditorGUILayout.HorizontalScope())
         {
-			using (new EditorGUILayout.HorizontalScope())
-			{
-				EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
-				EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
-				if (GUILayout.Button("Choose…", GUILayout.Width(80)))
-				{
-					var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
-					var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
-					if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
-				}
-			}
-            if (GUILayout.Button("Build Mod"))
-                BuildMod();
-            EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
+            // LEFT: Validate mod
+            using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
+            {
+                EditorGUILayout.LabelField("2) Validate mod", EditorStyles.boldLabel);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    if (GUILayout.Button("Run Validation"))
+                    {
+                        if (ValidateMod(out var issues))
+                        {
+                            EditorUtility.DisplayDialog("Validation", "Validation passed.", "OK");
+                        }
+                        else
+                        {
+                            var msg = issues != null && issues.Count > 0 ? ("Found " + issues.Count + " issue(s). See Console for details.") : "Validation failed.";
+                            Debug.LogWarning(issues != null && issues.Count > 0 ? "[ModSDK] Validation issues:\n - " + string.Join("\n - ", issues) : "[ModSDK] Validation failed.");
+                            EditorUtility.DisplayDialog("Validation failed", msg, "OK");
+                        }
+                    }
+                    scrollValidate = EditorGUILayout.BeginScrollView(scrollValidate, GUILayout.MinHeight(120), GUILayout.MaxHeight(240));
+                    EditorGUILayout.EndScrollView();
+                    EditorGUILayout.HelpBox("Checks: duplicates, spaces in addresses, type mismatches vs. public list, non-public overrides.", MessageType.None);
+                }
+            }
+
+            GUILayout.Space(8);
+
+            // RIGHT: Build mod
+            using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
+            {
+                EditorGUILayout.LabelField("3) Build mod package", EditorStyles.boldLabel);
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
+                        EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
+                        if (GUILayout.Button("Choose…", GUILayout.Width(80)))
+                        {
+                            var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
+                            var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
+                            if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
+                        }
+                    }
+                    if (GUILayout.Button("Build Mod"))
+                        BuildMod();
+                    EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
+                }
+            }
         }
     }
 
@@ -443,7 +547,12 @@ public class ModSDKWindow : EditorWindow
                     publicCatalog.entries = MiniJsonList(json);
                 }
             }
-            Debug.Log($"[ModSDK] Loaded {publicCatalog.entries.Count} public addresses.");
+			Debug.Log($"[ModSDK] Loaded {publicCatalog.entries.Count} public addresses.");
+			// Invalidate caches and bump version so filtered/tree recompute lazily
+			publicVersion++;
+			cacheVersion = -1;
+			cacheRoot = null;
+			cacheFiltered = null;
         }
         catch (Exception ex)
         {
@@ -551,7 +660,7 @@ public class ModSDKWindow : EditorWindow
         return root;
     }
 
-    private void DrawAddressTree(TreeNode node, int indent, Dictionary<string, string> overrideMap)
+    private void DrawAddressTree(TreeNode node, int indent, Dictionary<string, string> overrideMap, HashSet<string> overrideFolders = null)
     {
         if (node == null) return;
         foreach (var child in node.children)
@@ -563,9 +672,9 @@ public class ModSDKWindow : EditorWindow
 					// Indent one more level than the parent folder so leaves align under the folder content
 					GUILayout.Space(12 * (indent + 1));
 					bool isSel = string.Equals(selectedAddress, child.fullPath, StringComparison.Ordinal);
-					var typeText = string.IsNullOrEmpty(child.entry?.type) ? "" : $"  [{child.entry.type}]";
-					var roleText = string.IsNullOrEmpty(child.entry?.role) ? "" : $" ({child.entry.role})";
-					var label = new GUIContent(child.name + typeText + roleText);
+                    var typeText = string.IsNullOrEmpty(child.entry?.type) ? "" : $"  [{child.entry.type}]";
+                    var roleText = string.IsNullOrEmpty(child.entry?.role) ? "" : $" ({child.entry.role})";
+                    var label = new GUIContent(child.name + typeText + roleText);
 					// Tooltip shows full context, including meta
 					{
 						var tt = "";
@@ -575,7 +684,20 @@ public class ModSDKWindow : EditorWindow
 						if (!string.IsNullOrEmpty(child.entry?.meta)) tt += $"Meta: {child.entry.meta}";
 						label.tooltip = tt;
 					}
-					var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
+                    var style = isSel ? new GUIStyle(EditorStyles.boldLabel) : new GUIStyle(EditorStyles.label);
+                    if (overrideMap != null && overrideMap.ContainsKey(child.fullPath))
+                    {
+                        style.fontStyle = isSel ? FontStyle.BoldAndItalic : FontStyle.Italic;
+                        style.normal.textColor = TintOverride;
+                        style.hover.textColor = TintOverride;
+                        style.active.textColor = TintOverride;
+                    }
+                    if (isSel)
+                    {
+                        style.normal.textColor = TintSelected;
+                        style.hover.textColor = TintSelected;
+                        style.active.textColor = TintSelected;
+                    }
 					if (GUILayout.Button(label, style, GUILayout.ExpandWidth(false)))
 						selectedAddress = child.fullPath;
 					GUILayout.FlexibleSpace();
@@ -593,7 +715,16 @@ public class ModSDKWindow : EditorWindow
                 {
                     GUILayout.Space(12 * indent);
                     var expanded = treeExpanded.Contains(child.fullPath);
-                    var newExpanded = EditorGUILayout.Foldout(expanded, child.name, true);
+                    var folderStyle = new GUIStyle(EditorStyles.foldout);
+                    if (overrideFolders != null && overrideFolders.Contains(child.fullPath))
+                    {
+                        folderStyle.fontStyle = FontStyle.Italic;
+                        folderStyle.normal.textColor = TintOverride;
+                        folderStyle.onNormal.textColor = TintOverride;
+                        folderStyle.focused.textColor = TintOverride;
+                        folderStyle.onFocused.textColor = TintOverride;
+                    }
+                    var newExpanded = EditorGUILayout.Foldout(expanded, child.name, true, folderStyle);
                     if (newExpanded != expanded)
                     {
                         if (newExpanded) treeExpanded.Add(child.fullPath);
@@ -601,7 +732,64 @@ public class ModSDKWindow : EditorWindow
                     }
                 }
 				if (treeExpanded.Contains(child.fullPath))
-                    DrawAddressTree(child, indent + 1, overrideMap);
+                    DrawAddressTree(child, indent + 1, overrideMap, overrideFolders);
+            }
+        }
+    }
+
+    private void DrawOverridesTree(TreeNode node, int indent, Dictionary<string, string> overrides)
+    {
+        if (node == null) return;
+        foreach (var child in node.children)
+        {
+            if (child.isLeaf)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(12 * (indent + 1));
+                    bool isSel = string.Equals(selectedAddress, child.fullPath, StringComparison.Ordinal);
+                    var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
+                    if (GUILayout.Button(child.name, style, GUILayout.ExpandWidth(false)))
+                        selectedAddress = child.fullPath;
+
+                    GUILayout.FlexibleSpace();
+
+                    if (overrides != null && overrides.TryGetValue(child.fullPath, out var overPath) && !string.IsNullOrEmpty(overPath))
+                    {
+                        var mini = new GUIContent("→ " + CompactAssetPath(overPath), overPath);
+                        EditorGUILayout.LabelField(mini, EditorStyles.miniLabel, GUILayout.Width(160));
+                        if (GUILayout.Button("Ping", GUILayout.Width(44)))
+                        {
+                            var obj = AssetDatabase.LoadAssetAtPath<Object>(overPath);
+                            if (obj != null) EditorGUIUtility.PingObject(obj);
+                        }
+                        if (GUILayout.Button("Select", GUILayout.Width(56)))
+                        {
+                            var obj = AssetDatabase.LoadAssetAtPath<Object>(overPath);
+                            if (obj != null) Selection.activeObject = obj;
+                        }
+                        if (GUILayout.Button("Remove", GUILayout.Width(68)))
+                        {
+                            RemoveOverrideForCurrentMod(child.fullPath, overPath);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(12 * indent);
+                    var expanded = overridesExpanded.Contains(child.fullPath);
+                    var newExpanded = EditorGUILayout.Foldout(expanded, child.name, true);
+                    if (newExpanded != expanded)
+                    {
+                        if (newExpanded) overridesExpanded.Add(child.fullPath);
+                        else overridesExpanded.Remove(child.fullPath);
+                    }
+                }
+                if (overridesExpanded.Contains(child.fullPath))
+                    DrawOverridesTree(child, indent + 1, overrides);
             }
         }
     }
@@ -638,6 +826,43 @@ public class ModSDKWindow : EditorWindow
         return map;
     }
 
+	private Dictionary<string, string> GetOverrideMapCached()
+	{
+		var now = EditorApplication.timeSinceStartup;
+		var mod = San(modName);
+		bool modChanged = cachedOverrideForMod == null || !string.Equals(cachedOverrideForMod, mod, StringComparison.Ordinal);
+		bool stale = lastOverrideRefresh < 0 || (now - lastOverrideRefresh) > OverrideRefreshInterval;
+		if (cachedOverrideMap == null || modChanged || stale)
+		{
+			cachedOverrideMap = ComputeOverrideMap();
+			cachedOverrideForMod = mod;
+			lastOverrideRefresh = now;
+		}
+		return cachedOverrideMap;
+	}
+
+	private void EnsureFilteredTreeUpToDate()
+	{
+		var curSearch = search ?? "";
+		var curLabel = filterLabel ?? "";
+		var curFolder = (filterFolder ?? "");
+		if (cacheRoot != null && cacheVersion == publicVersion &&
+			string.Equals(cacheSearch, curSearch, StringComparison.Ordinal) &&
+			string.Equals(cacheLabel, curLabel, StringComparison.Ordinal) &&
+			string.Equals(cacheFolder, curFolder, StringComparison.Ordinal))
+		{
+			return;
+		}
+
+		cacheSearch = curSearch;
+		cacheLabel = curLabel;
+		cacheFolder = curFolder;
+		cacheVersion = publicVersion;
+
+		cacheFiltered = FilterPublic(cacheSearch, cacheLabel, cacheFolder);
+		cacheRoot = BuildAddressTree(cacheFiltered);
+	}
+
     private static string CompactAssetPath(string assetPath)
     {
         if (string.IsNullOrEmpty(assetPath)) return "";
@@ -647,6 +872,24 @@ public class ModSDKWindow : EditorWindow
         var shorty = string.IsNullOrEmpty(parent) ? fileName : (parent + "/" + fileName);
         if (shorty.Length > 42) shorty = "…" + shorty.Substring(shorty.Length - 42);
         return shorty;
+    }
+
+    private HashSet<string> GetOverrideFolderSet(Dictionary<string, string> overrideMap)
+    {
+        var set = new HashSet<string>();
+        if (overrideMap == null) return set;
+        foreach (var addr in overrideMap.Keys)
+        {
+            var path = (addr ?? string.Empty).Replace('\\','/');
+            var parts = path.Split(new[]{'/'}, StringSplitOptions.RemoveEmptyEntries);
+            var cur = "";
+            for (int i = 0; i < parts.Length - 1; i++)
+            {
+                cur += parts[i] + "/";
+                set.Add(cur);
+            }
+        }
+        return set;
     }
 
     // ---------- Assign ----------
@@ -724,6 +967,49 @@ public class ModSDKWindow : EditorWindow
         settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryModified, null, true, true);
         AssetDatabase.SaveAssets();
         Debug.Log($"[ModSDK] Assigned: {ok}, created entries: {created}, moved: {moved}, type mismatches (warn): {mismatched}");
+    }
+
+    private void RemoveOverrideForCurrentMod(string address, string assetPath)
+    {
+        try
+        {
+            var settings = GetOrCreatePerModSettings();
+            if (settings == null) { Debug.LogWarning($"[ModSDK] Remove override failed: settings not found for '{address}'."); return; }
+
+            var group = settings.groups.FirstOrDefault(g => g != null && g.name == targetGroupName);
+            if (group == null) { Debug.LogWarning($"[ModSDK] Remove override failed: group '{targetGroupName}' not found."); return; }
+
+            string modLabel = $"mod:{San(modName)}";
+            // find entries in target group with matching address and this mod label
+            var toRemove = group.entries
+                .Where(e => e != null && string.Equals(e.address ?? string.Empty, address, StringComparison.Ordinal)
+                    && e.labels != null && e.labels.Contains(modLabel))
+                .ToList();
+
+            if (toRemove.Count == 0)
+            {
+                Debug.LogWarning($"[ModSDK] No override entry found for '{address}' in this mod.");
+                return;
+            }
+
+            Undo.RecordObject(settings, "Remove Mod Override");
+            foreach (var e in toRemove)
+            {
+                try { settings.RemoveAssetEntry(e.guid); } catch {}
+            }
+            settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryRemoved, null, true, true);
+            AssetDatabase.SaveAssets();
+
+            // Invalidate override cache so UI updates quickly
+            cachedOverrideMap = null;
+            lastOverrideRefresh = -1;
+            Repaint();
+            Debug.Log($"[ModSDK] Removed override for '{address}' from mod '{San(modName)}'.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[ModSDK] Failed to remove override for '{address}': {ex.Message}");
+        }
     }
 
     // Auto mode removed per updated UX
@@ -1002,6 +1288,52 @@ public class ModSDKWindow : EditorWindow
         }
         catch { return AddressableAssetSettingsDefaultObject.Settings; }
     }
+
+	private AddressableAssetSettings GetOrCreatePerModSettingsFor(string mod)
+	{
+		try
+		{
+			var newRoot = Path.Combine(GetWorkingRootAssetPath(), San(mod));
+			var legacyRoot = Path.Combine(LegacyRootAssetPath(), San(mod));
+			var newAssetPath = Path.Combine(newRoot, "AddressableAssetSettings.asset");
+			var legacyAssetPath = Path.Combine(legacyRoot, "AddressableAssetSettings.asset");
+
+			var settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(newAssetPath);
+			if (settings == null)
+				settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(legacyAssetPath);
+
+			if (settings == null)
+			{
+				Directory.CreateDirectory(newRoot);
+				settings = AddressableAssetSettings.Create(newRoot, "AddressableAssetSettings", true, true);
+				AssetDatabase.SaveAssets();
+				AssetDatabase.Refresh();
+			}
+			return settings;
+		}
+		catch { return AddressableAssetSettingsDefaultObject.Settings; }
+	}
+
+	private bool TryFindPerModSettings(string mod, out AddressableAssetSettings settings, out string folderAssetPath)
+	{
+		settings = null;
+		folderAssetPath = null;
+		try
+		{
+			var newRoot = Path.Combine(GetWorkingRootAssetPath(), San(mod));
+			var legacyRoot = Path.Combine(LegacyRootAssetPath(), San(mod));
+			var newAssetPath = Path.Combine(newRoot, "AddressableAssetSettings.asset");
+			var legacyAssetPath = Path.Combine(legacyRoot, "AddressableAssetSettings.asset");
+
+			settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(newAssetPath);
+			if (settings != null) { folderAssetPath = newRoot; return true; }
+			settings = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(legacyAssetPath);
+			if (settings != null) { folderAssetPath = legacyRoot; return true; }
+			settings = null;
+			return false;
+		}
+		catch { settings = null; folderAssetPath = null; return false; }
+	}
 
 	private string GetWorkingRootAssetPath()
 	{
