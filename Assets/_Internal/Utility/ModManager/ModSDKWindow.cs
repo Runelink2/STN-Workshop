@@ -63,6 +63,12 @@ public class ModSDKWindow : EditorWindow
 	private double lastOverrideRefresh = -1;
 	private string cachedOverrideForMod = null;
 	private const double OverrideRefreshInterval = 0.35; // seconds
+	private const float BottomRowFixedHeight = 180f; // px height for Validate/Build row
+	private const float ValidationPanelFixedWidth = 420f; // px width for Validate panel
+
+	// ---------- Validation state ----------
+	private List<string> lastValidationIssues = new List<string>();
+	private bool lastValidationPassed = false;
 
     // ---------- Menu ----------
     [MenuItem("Modding/Open Mod SDK")]
@@ -109,6 +115,7 @@ public class ModSDKWindow : EditorWindow
         // Force the path to the canonical location to avoid stale serialized values
         publicJsonPath = DefaultPublicJsonPath;
         LoadPublicAddresses();
+        AutoSelectFirstModIfAvailable();
     }
 
     // ---------- GUI ----------
@@ -406,7 +413,7 @@ public class ModSDKWindow : EditorWindow
                         else Debug.LogWarning("Select an address from the list first.");
                     }
 
-                    EditorGUILayout.HelpBox("Tip: select your asset(s) in Project, filter then browse like folders and click an address to select it.", MessageType.None);
+					EditorGUILayout.HelpBox("Tip: You can drag and drop assets from the Project view directly onto an address in the list above to assign them. Or: click an address to highlight it, select an asset in the Project and press 'Assign Selected To Highlighted'.", MessageType.None);
                 }
             }
 
@@ -459,57 +466,80 @@ public class ModSDKWindow : EditorWindow
             }
         }
 
-        // VALIDATE + BUILD side-by-side
-        EditorGUILayout.Space(8);
-        using (new EditorGUILayout.HorizontalScope())
+        // VALIDATE + BUILD side-by-side (fixed height)
+        EditorGUILayout.Space(4);
+        using (new EditorGUILayout.VerticalScope(GUILayout.Height(BottomRowFixedHeight)))
         {
-            // LEFT: Validate mod
-            using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                EditorGUILayout.LabelField("2) Validate mod", EditorStyles.boldLabel);
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+				// LEFT: Validate mod (fixed width)
+				using (new EditorGUILayout.VerticalScope(GUILayout.Width(ValidationPanelFixedWidth)))
                 {
-                    if (GUILayout.Button("Run Validation"))
+                    EditorGUILayout.LabelField("2) Validate mod", EditorStyles.boldLabel);
+                    using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
-                        if (ValidateMod(out var issues))
-                        {
-                            EditorUtility.DisplayDialog("Validation", "Validation passed.", "OK");
-                        }
-                        else
-                        {
-                            var msg = issues != null && issues.Count > 0 ? ("Found " + issues.Count + " issue(s). See Console for details.") : "Validation failed.";
-                            Debug.LogWarning(issues != null && issues.Count > 0 ? "[ModSDK] Validation issues:\n - " + string.Join("\n - ", issues) : "[ModSDK] Validation failed.");
-                            EditorUtility.DisplayDialog("Validation failed", msg, "OK");
-                        }
-                    }
-                    scrollValidate = EditorGUILayout.BeginScrollView(scrollValidate, GUILayout.MinHeight(120), GUILayout.MaxHeight(240));
-                    EditorGUILayout.EndScrollView();
-                    EditorGUILayout.HelpBox("Checks: duplicates, spaces in addresses, type mismatches vs. public list, non-public overrides.", MessageType.None);
-                }
-            }
-
-            GUILayout.Space(8);
-
-            // RIGHT: Build mod
-            using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
-            {
-                EditorGUILayout.LabelField("3) Build mod package", EditorStyles.boldLabel);
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                {
                     using (new EditorGUILayout.HorizontalScope())
                     {
-                        EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
-                        EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
-                        if (GUILayout.Button("Choose…", GUILayout.Width(80)))
+                        if (GUILayout.Button("Run Validation", GUILayout.Width(120)))
                         {
-                            var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
-                            var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
-                            if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
+                            lastValidationPassed = ValidateMod(out var issues);
+                            lastValidationIssues = issues ?? new List<string>();
+                            Repaint();
+                        }
+                        if (GUILayout.Button("Clear", GUILayout.Width(72)))
+                        {
+                            lastValidationIssues = new List<string>();
+                            lastValidationPassed = false;
+                            Repaint();
+                        }
+                        GUILayout.FlexibleSpace();
+                    }
+                    scrollValidate = EditorGUILayout.BeginScrollView(scrollValidate, GUILayout.MinHeight(120), GUILayout.MaxHeight(240));
+                    if (lastValidationIssues != null && lastValidationIssues.Count > 0)
+                    {
+                        var redStyle = new GUIStyle(EditorStyles.miniBoldLabel);
+                        redStyle.normal.textColor = new Color(1f, 0.4f, 0.4f);
+                        EditorGUILayout.LabelField($"Issues: {lastValidationIssues.Count}", redStyle);
+                        foreach (var line in lastValidationIssues)
+                        {
+                            var redWordWrapStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel);
+                            redWordWrapStyle.normal.textColor = new Color(1f, 0.4f, 0.4f);
+                            EditorGUILayout.LabelField("• " + line, redWordWrapStyle);
                         }
                     }
-                    if (GUILayout.Button("Build Mod"))
-                        BuildMod();
-                    EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
+                    else
+                    {
+                        var status = lastValidationPassed ? "Validation passed." : "Press Run Validation to analyze the current mod.";
+                        EditorGUILayout.LabelField(status, EditorStyles.miniLabel);
+                    }
+                    EditorGUILayout.EndScrollView();
+                    EditorGUILayout.HelpBox("Checks: duplicates, spaces in addresses, type mismatches vs. public list, non-public overrides.", MessageType.None);
+                    }
+                }
+
+                GUILayout.Space(8);
+
+                // RIGHT: Build mod
+                using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
+                {
+                    EditorGUILayout.LabelField("3) Build mod package", EditorStyles.boldLabel);
+                    using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                    {
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
+                            EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
+                            if (GUILayout.Button("Choose…", GUILayout.Width(80)))
+                            {
+                                var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
+                                var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
+                                if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
+                            }
+                        }
+                        if (GUILayout.Button("Build Mod"))
+                            BuildMod();
+                        EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
+                    }
                 }
             }
         }
@@ -698,15 +728,66 @@ public class ModSDKWindow : EditorWindow
                         style.hover.textColor = TintSelected;
                         style.active.textColor = TintSelected;
                     }
-					if (GUILayout.Button(label, style, GUILayout.ExpandWidth(false)))
+					var clickedName = GUILayout.Button(label, style, GUILayout.ExpandWidth(false));
+					var nameRect = GUILayoutUtility.GetLastRect();
+					EditorGUIUtility.AddCursorRect(nameRect, MouseCursor.Link);
+					if (clickedName)
 						selectedAddress = child.fullPath;
+					// Drag & Drop onto address name to assign assets to this address
+					var evt = Event.current;
+					if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) && nameRect.Contains(evt.mousePosition))
+					{
+						DragAndDrop.visualMode = DragAndDropVisualMode.Link;
+						if (evt.type == EventType.DragPerform)
+						{
+							DragAndDrop.AcceptDrag();
+							var guids = new HashSet<string>();
+							foreach (var obj in DragAndDrop.objectReferences)
+							{
+								var p = AssetDatabase.GetAssetPath(obj);
+								if (string.IsNullOrEmpty(p)) continue;
+								if (Directory.Exists(p))
+								{
+									foreach (var g in AssetDatabase.FindAssets("", new[] { p })) guids.Add(g);
+								}
+								else
+								{
+									var g = AssetDatabase.AssetPathToGUID(p);
+									if (!string.IsNullOrEmpty(g)) guids.Add(g);
+								}
+							}
+							if (guids.Count > 0)
+							{
+								AssignGuidsToAddress(child.entry, guids.ToList());
+								cachedOverrideMap = null;
+								lastOverrideRefresh = -1;
+								Repaint();
+							}
+						}
+						evt.Use();
+					}
 					GUILayout.FlexibleSpace();
 					// Inline chosen override path on the right
-					if (overrideMap != null && overrideMap.TryGetValue(child.fullPath, out var overPath) && !string.IsNullOrEmpty(overPath))
-					{
-						var right = new GUIContent("→ " + CompactAssetPath(overPath), overPath);
-						EditorGUILayout.LabelField(right, EditorStyles.miniLabel, GUILayout.ExpandWidth(false));
-					}
+						if (overrideMap != null && overrideMap.TryGetValue(child.fullPath, out var overPath) && !string.IsNullOrEmpty(overPath))
+						{
+							var rawText = "→ " + CompactAssetPath(overPath);
+							var linkStyle = new GUIStyle(EditorStyles.miniLabel);
+							linkStyle.richText = true;
+							var content = new GUIContent($"<color=#9ccbff>{rawText}</color>", overPath);
+							var rect = GUILayoutUtility.GetRect(content, linkStyle, GUILayout.ExpandWidth(false));
+							EditorGUIUtility.AddCursorRect(rect, MouseCursor.Link);
+							GUI.Label(rect, content, linkStyle);
+							if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
+							{
+								var obj = AssetDatabase.LoadAssetAtPath<Object>(overPath);
+								if (obj != null)
+								{
+									EditorGUIUtility.PingObject(obj);
+									Selection.activeObject = obj;
+								}
+								Event.current.Use();
+							}
+						}
 				}
             }
 			else
@@ -749,8 +830,11 @@ public class ModSDKWindow : EditorWindow
                     GUILayout.Space(12 * (indent + 1));
                     bool isSel = string.Equals(selectedAddress, child.fullPath, StringComparison.Ordinal);
                     var style = isSel ? EditorStyles.boldLabel : EditorStyles.label;
-                    if (GUILayout.Button(child.name, style, GUILayout.ExpandWidth(false)))
-                        selectedAddress = child.fullPath;
+					var clicked = GUILayout.Button(child.name, style, GUILayout.ExpandWidth(false));
+					var rect = GUILayoutUtility.GetLastRect();
+					EditorGUIUtility.AddCursorRect(rect, MouseCursor.Link);
+					if (clicked)
+						selectedAddress = child.fullPath;
 
                     GUILayout.FlexibleSpace();
 
@@ -969,6 +1053,74 @@ public class ModSDKWindow : EditorWindow
         Debug.Log($"[ModSDK] Assigned: {ok}, created entries: {created}, moved: {moved}, type mismatches (warn): {mismatched}");
     }
 
+	// Helper for drag-and-drop: assign a set of GUIDs to a specific public address entry
+	private void AssignGuidsToAddress(PublicEntry target, List<string> guids)
+	{
+		if (target == null || guids == null || guids.Count == 0) return;
+		var settings = GetOrCreatePerModSettings();
+		var group = EnsureGroup(settings, targetGroupName);
+
+		var existingAddresses = new HashSet<string>(
+			settings.groups
+				.Where(g => g != null)
+				.SelectMany(g => g.entries ?? Enumerable.Empty<AddressableAssetEntry>())
+				.Where(e => e != null)
+				.Select(e => e.address ?? string.Empty)
+		);
+
+		Undo.RecordObject(settings, "Assign Mod Addresses (Drag&Drop)");
+		int created = 0, moved = 0, mismatched = 0, ok = 0;
+
+		foreach (var guid in guids)
+		{
+			var path = AssetDatabase.GUIDToAssetPath(guid);
+			if (string.IsNullOrEmpty(path) || path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) continue;
+			if (path.Contains("/EditorOnly/")) continue;
+
+			var entry = settings.FindAssetEntry(guid);
+			if (entry == null)
+			{
+				entry = settings.CreateOrMoveEntry(guid, group);
+				created++;
+			}
+
+			// type check (best-effort)
+			if (!string.IsNullOrEmpty(target.type))
+			{
+				var mainType = AssetDatabase.GetMainAssetTypeAtPath(path)?.Name ?? "";
+				if (!string.IsNullOrEmpty(mainType) && !string.Equals(mainType, target.type, StringComparison.Ordinal))
+					mismatched++;
+			}
+
+			var desired = target.address.Trim();
+			if (!existingAddresses.Contains(desired)) entry.SetAddress(desired);
+			else entry.SetAddress(desired);
+
+			if (entry.parentGroup != group)
+			{
+				settings.CreateOrMoveEntry(entry.guid, group);
+				moved++;
+			}
+
+			try
+			{
+				var modLabel = $"mod:{San(modName)}";
+				var labels = settings.GetLabels();
+				bool has = false; foreach (var l in labels) { if (l == modLabel) { has = true; break; } }
+				if (!has) settings.AddLabel(modLabel);
+				var elabels = new HashSet<string>(entry.labels ?? Enumerable.Empty<string>());
+				if (!elabels.Contains(modLabel)) entry.SetLabel(modLabel, true);
+			}
+			catch { }
+
+			ok++;
+		}
+
+		settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryModified, null, true, true);
+		AssetDatabase.SaveAssets();
+		Debug.Log($"[ModSDK] (Drag&Drop) Assigned: {ok}, created: {created}, moved: {moved}, type mismatches (warn): {mismatched}");
+	}
+
     private void RemoveOverrideForCurrentMod(string address, string assetPath)
     {
         try
@@ -1058,9 +1210,6 @@ public class ModSDKWindow : EditorWindow
                     issues.Add($"Type mismatch for '{addr}': expected {tExpected}, found {tActual}");
             }
         }
-
-        if (issues.Count == 0) Debug.Log("[ModSDK] Validation passed.");
-        else Debug.LogWarning($"[ModSDK] Validation found {issues.Count} issue(s):\n - " + string.Join("\n - ", issues));
 
         return issues.Count == 0;
     }
@@ -1505,6 +1654,28 @@ public class ModSDKWindow : EditorWindow
         var existing = profiles.GetValueByName(settings.activeProfileId, name);
         if (string.IsNullOrEmpty(existing)) profiles.CreateValue(name, value);
         profiles.SetValue(settings.activeProfileId, name, value);
+    }
+
+    private void AutoSelectFirstModIfAvailable()
+    {
+        try
+        {
+            var activeNew = Path.Combine(GetWorkingRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+            var activeLegacy = Path.Combine(LegacyRootAssetPath(), San(modName), "AddressableAssetSettings.asset");
+            bool hasActive = AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeNew) != null ||
+                             AssetDatabase.LoadAssetAtPath<AddressableAssetSettings>(activeLegacy) != null;
+            if (hasActive) return;
+
+            var mods = GetAvailableModNames();
+            if (mods != null && mods.Count > 0)
+            {
+                modName = mods[0];
+                cachedOverrideMap = null;
+                lastOverrideRefresh = -1;
+                // avoid noisy logs on editor load; UI will reflect selection immediately
+            }
+        }
+        catch { }
     }
 
 	private List<string> GetAvailableModNames()
