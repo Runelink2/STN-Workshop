@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
@@ -412,6 +413,17 @@ public class ModSDKWindow : EditorWindow
                         }
                         else Debug.LogWarning("Select an address from the list first.");
                     }
+
+				if (GUILayout.Button("Build Preview From Metadata"))
+				{
+					if (!string.IsNullOrEmpty(selectedAddress))
+					{
+						var entry = publicCatalog.entries.FirstOrDefault(e => string.Equals(e.address, selectedAddress, StringComparison.Ordinal));
+						if (entry != null) BuildPreviewFromMeta(entry);
+						else Debug.LogWarning("Selected address not found.");
+					}
+					else Debug.LogWarning("Select an address from the list first.");
+				}
 
 					EditorGUILayout.HelpBox("Tip: You can drag and drop assets from the Project view directly onto an address in the list above to assign them. Or: click an address to highlight it, select an asset in the Project and press 'Assign Selected To Highlighted'.", MessageType.None);
                 }
@@ -1119,6 +1131,116 @@ public class ModSDKWindow : EditorWindow
 		settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryModified, null, true, true);
 		AssetDatabase.SaveAssets();
 		Debug.Log($"[ModSDK] (Drag&Drop) Assigned: {ok}, created: {created}, moved: {moved}, type mismatches (warn): {mismatched}");
+	}
+
+	// ---------- Preview from metadata ----------
+	private void BuildPreviewFromMeta(PublicEntry entry)
+	{
+		try
+		{
+			if (entry == null)
+			{
+				Debug.LogWarning("[ModSDK] Build preview failed: entry is null.");
+				return;
+			}
+			var meta = entry.meta ?? string.Empty;
+			if (string.IsNullOrWhiteSpace(meta))
+			{
+				Debug.LogWarning($"[ModSDK] No meta for '{entry.address}'.");
+				return;
+			}
+
+			if (!TryParseVec3(meta, "aabbCenter", out var aabbCenter))
+			{
+				Debug.LogWarning($"[ModSDK] Could not parse aabbCenter from meta for '{entry.address}'.");
+				return;
+			}
+			if (!TryParseVec3(meta, "aabbSize", out var aabbSize))
+			{
+				Debug.LogWarning($"[ModSDK] Could not parse aabbSize from meta for '{entry.address}'.");
+				return;
+			}
+
+			// pivotOffset is optional; if present, prefer -pivotOffset as cube localPosition; else use aabbCenter
+			Vector3 cubeLocalPos = aabbCenter;
+			if (TryParseVec3(meta, "pivotOffset", out var pivotOffset))
+				cubeLocalPos = -pivotOffset;
+
+			// Create a root at origin to represent the pivot
+			var root = new GameObject($"Preview_{San(entry.address)}");
+			root.transform.position = Vector3.zero;
+
+			// Apply root scale if provided, so world-space preview size matches captured context
+			if (TryParseVec3(meta, "rootScale", out var rootScale))
+			{
+				root.transform.localScale = new Vector3(
+					Mathf.Max(0.0001f, rootScale.x),
+					Mathf.Max(0.0001f, rootScale.y),
+					Mathf.Max(0.0001f, rootScale.z)
+				);
+			}
+
+			// Create a white cube child sized to the AABB and offset so the pivot is correct
+			var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+			cube.name = "AABB_Cube";
+			cube.transform.SetParent(root.transform, false);
+			cube.transform.localPosition = cubeLocalPos;
+			cube.transform.localRotation = Quaternion.identity;
+			cube.transform.localScale = new Vector3(
+				Mathf.Max(0.0001f, aabbSize.x),
+				Mathf.Max(0.0001f, aabbSize.y),
+				Mathf.Max(0.0001f, aabbSize.z)
+			);
+
+			// Remove collider to avoid selection blocking, then assign a simple white material
+			var box = cube.GetComponent<BoxCollider>(); if (box != null) Object.DestroyImmediate(box);
+			var renderer = cube.GetComponent<MeshRenderer>();
+			if (renderer != null)
+			{
+				var shader = Shader.Find("Unlit/Color");
+				if (shader == null) shader = Shader.Find("Standard");
+				if (shader != null)
+				{
+					var mat = new Material(shader);
+					if (shader.name == "Unlit/Color") mat.SetColor("_Color", Color.white);
+					else mat.color = Color.white;
+					renderer.sharedMaterial = mat;
+				}
+			}
+
+			Selection.activeGameObject = root;
+			EditorGUIUtility.PingObject(root);
+			Debug.Log($"[ModSDK] Built preview cube for '{entry.address}'.", root);
+		}
+		catch (Exception ex)
+		{
+			Debug.LogError($"[ModSDK] Failed to build preview: {ex.Message}");
+		}
+	}
+
+	private static bool TryParseVec3(string meta, string key, out Vector3 value)
+	{
+		value = Vector3.zero;
+		if (string.IsNullOrEmpty(meta) || string.IsNullOrEmpty(key)) return false;
+		try
+		{
+			var idx = meta.IndexOf(key, StringComparison.OrdinalIgnoreCase);
+			if (idx < 0) return false;
+			var open = meta.IndexOf('(', idx);
+			if (open < 0) return false;
+			var close = meta.IndexOf(')', open + 1);
+			if (close < 0 || close <= open + 1) return false;
+			var inner = meta.Substring(open + 1, close - open - 1);
+			var parts = inner.Split(new[] {','}, StringSplitOptions.RemoveEmptyEntries);
+			if (parts.Length != 3) return false;
+			var ci = CultureInfo.InvariantCulture;
+			float x = float.Parse(parts[0].Trim(), ci);
+			float y = float.Parse(parts[1].Trim(), ci);
+			float z = float.Parse(parts[2].Trim(), ci);
+			value = new Vector3(x, y, z);
+			return true;
+		}
+		catch { return false; }
 	}
 
     private void RemoveOverrideForCurrentMod(string address, string assetPath)
