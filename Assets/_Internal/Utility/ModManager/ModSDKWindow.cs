@@ -1327,11 +1327,24 @@ public class ModSDKWindow : EditorWindow
 				var slash = string.IsNullOrEmpty(leafName) ? -1 : leafName.LastIndexOf('/');
 				if (slash >= 0 && slash + 1 < leafName.Length) leafName = leafName.Substring(slash + 1);
 				if (string.IsNullOrEmpty(leafName)) leafName = "Bounds";
-				CreateBakedBoxVisual(leafName, t, -node.pivotOffset, new Vector3(
-					Mathf.Max(0.0001f, node.bSize.x),
-					Mathf.Max(0.0001f, node.bSize.y),
-					Mathf.Max(0.0001f, node.bSize.z)
-				));
+				// If the only segment equals the root name, attach to the root instead of creating a duplicate child
+				bool singleSegment = node.path.IndexOf('/') < 0;
+				if (singleSegment && string.Equals(San(node.path), root.name, StringComparison.Ordinal))
+				{
+					AttachBakedBoxVisualToExisting(root, -node.pivotOffset, new Vector3(
+						Mathf.Max(0.0001f, node.bSize.x),
+						Mathf.Max(0.0001f, node.bSize.y),
+						Mathf.Max(0.0001f, node.bSize.z)
+					));
+				}
+				else
+				{
+					CreateBakedBoxVisual(leafName, t, -node.pivotOffset, new Vector3(
+						Mathf.Max(0.0001f, node.bSize.x),
+						Mathf.Max(0.0001f, node.bSize.y),
+						Mathf.Max(0.0001f, node.bSize.z)
+					));
+				}
 			}
 
 			// Recreate BoxColliders present on this node
@@ -1346,8 +1359,9 @@ public class ModSDKWindow : EditorWindow
 					colGo.transform.localScale = bc.size;
 					CreateBoxVisual("Collider", colGo.transform, Vector3.zero, Vector3.one);
 					// Add an actual BoxCollider on the node to mirror trigger setting
-					var collider = go.GetComponent<BoxCollider>();
-					if (collider == null) collider = go.AddComponent<BoxCollider>();
+					var colliderHost = t.gameObject;
+					var collider = colliderHost.GetComponent<BoxCollider>();
+					if (collider == null) collider = colliderHost.AddComponent<BoxCollider>();
 					collider.center = bc.center;
 					collider.size = bc.size;
 					collider.isTrigger = bc.isTrigger;
@@ -1366,7 +1380,10 @@ public class ModSDKWindow : EditorWindow
 		var parts = path.Split(new[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
 		Transform current = root.transform;
 		var builtPath = root.name;
-		for (int i = 0; i < parts.Length; i++)
+		// Skip duplicating the first segment if it matches the root name
+		int start = 0;
+		if (parts.Length > 0 && string.Equals(San(parts[0]), root.name, StringComparison.Ordinal)) start = 1;
+		for (int i = start; i < parts.Length; i++)
 		{
 			var name = parts[i];
 			Transform next = null;
@@ -1498,6 +1515,35 @@ public class ModSDKWindow : EditorWindow
 		var mat = GetDefaultLitMaterial();
 		if (mat != null) mr.sharedMaterial = mat;
 		return go;
+	}
+
+	// Attach a baked box mesh to an existing GameObject without creating a child
+	private static void AttachBakedBoxVisualToExisting(GameObject target, Vector3 localCenter, Vector3 size)
+	{
+		if (target == null) return;
+		var mf = target.GetComponent<MeshFilter>(); if (mf == null) mf = target.AddComponent<MeshFilter>();
+		var mr = target.GetComponent<MeshRenderer>(); if (mr == null) mr = target.AddComponent<MeshRenderer>();
+
+		var src = GetUnitCubeMesh();
+		var srcVerts = src.vertices;
+		var bakedVerts = new Vector3[srcVerts.Length];
+		for (int i = 0; i < srcVerts.Length; i++)
+		{
+			var v = srcVerts[i];
+			bakedVerts[i] = new Vector3(v.x * Mathf.Max(0.0001f, size.x), v.y * Mathf.Max(0.0001f, size.y), v.z * Mathf.Max(0.0001f, size.z)) + localCenter;
+		}
+		var mesh = new Mesh();
+		mesh.name = "BakedPivot_Attached";
+		mesh.vertices = bakedVerts;
+		mesh.triangles = src.triangles;
+		mesh.normals = src.normals;
+		mesh.RecalculateBounds();
+		mf.sharedMesh = mesh;
+
+		mr.shadowCastingMode = ShadowCastingMode.On;
+		mr.receiveShadows = true;
+		var mat = GetDefaultLitMaterial();
+		if (mat != null) mr.sharedMaterial = mat;
 	}
 
 	// Create a named lit box (no physics collider) as a child of parent, centered at localPos and scaled to size
@@ -1982,7 +2028,7 @@ public class ModSDKWindow : EditorWindow
     }
 
     private static string San(string s) => string.Concat((s ?? "mod").Select(ch =>
-        char.IsLetterOrDigit(ch) || ch=='_' || ch=='-' ? ch : '_'));
+        char.IsLetterOrDigit(ch) || ch=='_' || ch=='-' || ch=='(' || ch==')' ? ch : '_'));
 
     private static string Escape(string s) => (s ?? "").Replace("\\","\\\\").Replace("\"","\\\"");
 
