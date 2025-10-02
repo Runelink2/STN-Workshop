@@ -276,6 +276,7 @@ public class ModSDKWindow : EditorWindow
 						EditorGUILayout.LabelField("Create New Mod", EditorStyles.boldLabel);
 						newModName = EditorGUILayout.TextField("Mod Name", newModName);
 						modVersion = EditorGUILayout.TextField("Mod Version", modVersion);
+						GUILayout.Space (6);
 						using (new EditorGUILayout.HorizontalScope())
 						{
 							//GUILayout.FlexibleSpace();
@@ -911,17 +912,23 @@ public class ModSDKWindow : EditorWindow
 
                     if (overrides != null && overrides.TryGetValue(child.fullPath, out var overPath) && !string.IsNullOrEmpty(overPath))
                     {
-                        var mini = new GUIContent("→ " + CompactAssetPath(overPath), overPath);
-                        EditorGUILayout.LabelField(mini, EditorStyles.miniLabel, GUILayout.Width(160));
-                        if (GUILayout.Button("Ping", GUILayout.Width(44)))
+                        var rawText = "→ " + CompactAssetPath(overPath);
+                        var linkStyle = new GUIStyle(EditorStyles.miniLabel);
+                        linkStyle.richText = true;
+                        var content = new GUIContent($"<color=#9ccbff>{rawText}</color>", overPath);
+						var linkRect = GUILayoutUtility.GetRect(content, linkStyle, GUILayout.ExpandWidth(false));
+						linkRect.y += 3f;
+						EditorGUIUtility.AddCursorRect(linkRect, MouseCursor.Link);
+						GUI.Label(linkRect, content, linkStyle);
+						if (Event.current.type == EventType.MouseDown && linkRect.Contains(Event.current.mousePosition))
                         {
                             var obj = AssetDatabase.LoadAssetAtPath<Object>(overPath);
-                            if (obj != null) EditorGUIUtility.PingObject(obj);
-                        }
-                        if (GUILayout.Button("Select", GUILayout.Width(56)))
-                        {
-                            var obj = AssetDatabase.LoadAssetAtPath<Object>(overPath);
-                            if (obj != null) Selection.activeObject = obj;
+                            if (obj != null)
+                            {
+                                EditorGUIUtility.PingObject(obj);
+                                Selection.activeObject = obj;
+                            }
+                            Event.current.Use();
                         }
                         if (GUILayout.Button("Remove", GUILayout.Width(68)))
                         {
