@@ -9,6 +9,7 @@ using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
 using UnityEditor.AddressableAssets.Settings.GroupSchemas;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.AddressableAssets;
 using UnityEditor.AddressableAssets.Build;
 using UnityEditor.AddressableAssets.Build.DataBuilders;
@@ -18,9 +19,39 @@ using STN.ModSDK;
 public class ModSDKWindow : EditorWindow
 {
     // ---------- UI state ----------
-    [Serializable] public class PublicEntry { public string address; public string type; public string labels; public string role; public string meta; }
+    [Serializable] public class PublicEntry { public string address; public string type; public string labels; public string role; public string meta; public string structure; public string notes; }
     [Serializable] public class PublicCatalog { public List<PublicEntry> entries = new List<PublicEntry>(); }
     [Serializable] public class PublicRowsWrapper { public PublicEntry[] rows; }
+
+    [Serializable]
+    private class PrefabNode
+    {
+        public string path;
+        public Vector3 lp;
+        public Vector3 lr;
+        public Vector3 ls;
+        public bool hasBounds;
+        public Vector3 bCenter;
+        public Vector3 bSize;
+        public Vector3 pivotOffset;
+        public Vector3 pivotNorm;
+        public List<BoxCol> boxes;
+    }
+
+    [Serializable]
+    private class PrefabStructure
+    {
+        public Vector3 rootScale;
+        public List<PrefabNode> nodes;
+    }
+
+    [Serializable]
+    private class BoxCol
+    {
+        public Vector3 center;
+        public Vector3 size;
+        public bool isTrigger;
+    }
 
     private const string DefaultPublicJsonPath = "Assets/_Internal/Json/public_metadata.json";
     private PublicCatalog publicCatalog = new PublicCatalog();
@@ -117,6 +148,13 @@ public class ModSDKWindow : EditorWindow
         publicJsonPath = DefaultPublicJsonPath;
         LoadPublicAddresses();
         AutoSelectFirstModIfAvailable();
+        // Ensure UI reflects Project selection changes immediately
+        try { Selection.selectionChanged += Repaint; } catch { }
+    }
+
+    private void OnDisable()
+    {
+        try { Selection.selectionChanged -= Repaint; } catch { }
     }
 
     // ---------- GUI ----------
@@ -366,7 +404,7 @@ public class ModSDKWindow : EditorWindow
 			// LEFT: Assign addresses
 			using (new EditorGUILayout.VerticalScope(GUILayout.Width(colWidth), GUILayout.ExpandHeight(true)))
             {
-                EditorGUILayout.LabelField("1) Assign addresses to selected assets", EditorStyles.boldLabel);
+				EditorGUILayout.LabelField("Addressables Browser", EditorStyles.boldLabel);
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.ExpandHeight(true)))
                 {
                     search = EditorGUILayout.TextField("Search addresses", search);
@@ -403,9 +441,13 @@ public class ModSDKWindow : EditorWindow
                         EditorGUILayout.EndScrollView();
                     }
 
-                    if (GUILayout.Button("Assign Selected To Highlighted"))
+				// Enable only when an address is highlighted AND at least one asset is selected in Project view
+                EditorGUILayout.HelpBox("Tip: You can drag and drop assets from the Project view directly onto an address in the list above to assign them. Or: click an address to highlight it, select an asset in the Project and press 'Assign Selected To Highlighted'.", MessageType.None);
+                
+				EditorGUI.BeginDisabledGroup(string.IsNullOrEmpty(selectedAddress) || GetSelectedGuids(true).Count == 0);
+				if (GUILayout.Button("Assign Selected To Highlighted"))
                     {
-                        if (!string.IsNullOrEmpty(selectedAddress))
+					if (!string.IsNullOrEmpty(selectedAddress))
                         {
                             var entry = publicCatalog.entries.FirstOrDefault(e => string.Equals(e.address, selectedAddress, StringComparison.Ordinal));
                             if (entry != null) AssignSelectedToAddress(entry);
@@ -413,8 +455,27 @@ public class ModSDKWindow : EditorWindow
                         }
                         else Debug.LogWarning("Select an address from the list first.");
                     }
+				EditorGUI.EndDisabledGroup();
+				EditorGUILayout.HelpBox("Select a Model/Prefab addressabl and click 'Build Model/Prefab Preview' to spawn a temporary preview that reconstructs the object hierarchy with transforms, box colliders, model bounds, and correct mesh pivots (baked offsets).", MessageType.None);
 
-				if (GUILayout.Button("Build Preview From Metadata"))
+				// Enable only when an address is highlighted AND it has meta or structure AND is a model/prefab-like type
+				bool canPreview = false;
+				if (!string.IsNullOrEmpty(selectedAddress))
+				{
+					var entryPeek = publicCatalog.entries.FirstOrDefault(e => string.Equals(e.address, selectedAddress, StringComparison.Ordinal));
+					if (entryPeek != null)
+					{
+						bool hasData = !string.IsNullOrEmpty(entryPeek.structure) || !string.IsNullOrEmpty(entryPeek.meta);
+						bool isModelOrPrefab =
+							string.Equals(entryPeek.type, "Model", StringComparison.OrdinalIgnoreCase) ||
+							string.Equals(entryPeek.type, "GameObject", StringComparison.OrdinalIgnoreCase) ||
+							string.Equals(entryPeek.role, "Model", StringComparison.OrdinalIgnoreCase) ||
+							string.Equals(entryPeek.role, "Prefab", StringComparison.OrdinalIgnoreCase);
+						canPreview = hasData && isModelOrPrefab;
+					}
+				}
+				EditorGUI.BeginDisabledGroup(!canPreview);
+				if (GUILayout.Button("Build Model/Prefab Preview"))
 				{
 					if (!string.IsNullOrEmpty(selectedAddress))
 					{
@@ -424,8 +485,8 @@ public class ModSDKWindow : EditorWindow
 					}
 					else Debug.LogWarning("Select an address from the list first.");
 				}
+				EditorGUI.EndDisabledGroup();
 
-					EditorGUILayout.HelpBox("Tip: You can drag and drop assets from the Project view directly onto an address in the list above to assign them. Or: click an address to highlight it, select an asset in the Project and press 'Assign Selected To Highlighted'.", MessageType.None);
                 }
             }
 
@@ -433,7 +494,7 @@ public class ModSDKWindow : EditorWindow
 			// RIGHT: Current overrides
 			using (new EditorGUILayout.VerticalScope(GUILayout.Width(colWidth), GUILayout.ExpandHeight(true)))
             {
-                EditorGUILayout.LabelField("Current overrides in this mod", EditorStyles.boldLabel);
+				EditorGUILayout.LabelField("Mod Overrides", EditorStyles.boldLabel);
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.ExpandHeight(true)))
                 {
                     searchOverrides = EditorGUILayout.TextField("Search", searchOverrides);
@@ -478,16 +539,14 @@ public class ModSDKWindow : EditorWindow
             }
         }
 
-        // VALIDATE + BUILD side-by-side (fixed height)
         EditorGUILayout.Space(4);
         using (new EditorGUILayout.VerticalScope(GUILayout.Height(BottomRowFixedHeight)))
         {
             using (new EditorGUILayout.HorizontalScope())
             {
-				// LEFT: Validate mod (fixed width)
 				using (new EditorGUILayout.VerticalScope(GUILayout.Width(ValidationPanelFixedWidth)))
                 {
-                    EditorGUILayout.LabelField("2) Validate mod", EditorStyles.boldLabel);
+                    EditorGUILayout.LabelField("Mod Validation", EditorStyles.boldLabel);
                     using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
                     using (new EditorGUILayout.HorizontalScope())
@@ -534,7 +593,7 @@ public class ModSDKWindow : EditorWindow
                 // RIGHT: Build mod
                 using (new EditorGUILayout.VerticalScope(GUILayout.ExpandWidth(true)))
                 {
-                    EditorGUILayout.LabelField("3) Build mod package", EditorStyles.boldLabel);
+                    EditorGUILayout.LabelField("Build Mod", EditorStyles.boldLabel);
                     using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
                         using (new EditorGUILayout.HorizontalScope())
@@ -1143,6 +1202,17 @@ public class ModSDKWindow : EditorWindow
 				Debug.LogWarning("[ModSDK] Build preview failed: entry is null.");
 				return;
 			}
+			// Enforce model/prefab preview only
+			bool isModelOrPrefab =
+				string.Equals(entry.type, "Model", StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(entry.type, "GameObject", StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(entry.role, "Model", StringComparison.OrdinalIgnoreCase) ||
+				string.Equals(entry.role, "Prefab", StringComparison.OrdinalIgnoreCase);
+			if (!isModelOrPrefab)
+			{
+				Debug.LogWarning($"[ModSDK] Preview supported for Model/Prefab entries only. '{entry.address}' is type='{entry.type}', role='{entry.role}'.");
+				return;
+			}
 			var meta = entry.meta ?? string.Empty;
 			if (string.IsNullOrWhiteSpace(meta))
 			{
@@ -1150,6 +1220,14 @@ public class ModSDKWindow : EditorWindow
 				return;
 			}
 
+			// If we have a full PrefabStructure in structure, reconstruct hierarchy preview from it
+			if (!string.IsNullOrEmpty(entry.structure))
+			{
+				BuildPreviewFromStructure(entry);
+				return;
+			}
+
+			// Fallback: simple AABB preview from meta only
 			if (!TryParseVec3(meta, "aabbCenter", out var aabbCenter))
 			{
 				Debug.LogWarning($"[ModSDK] Could not parse aabbCenter from meta for '{entry.address}'.");
@@ -1167,7 +1245,10 @@ public class ModSDKWindow : EditorWindow
 				cubeLocalPos = -pivotOffset;
 
 			// Create a root at origin to represent the pivot
-			var root = new GameObject($"Preview_{San(entry.address)}");
+			var leaf = entry.address;
+			var slashIdx = string.IsNullOrEmpty(leaf) ? -1 : leaf.LastIndexOf('/') ;
+			if (slashIdx >= 0 && slashIdx + 1 < leaf.Length) leaf = leaf.Substring(slashIdx + 1);
+			var root = new GameObject(San(leaf));
 			root.transform.position = Vector3.zero;
 
 			// Apply root scale if provided, so world-space preview size matches captured context
@@ -1181,32 +1262,11 @@ public class ModSDKWindow : EditorWindow
 			}
 
 			// Create a white cube child sized to the AABB and offset so the pivot is correct
-			var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-			cube.name = "AABB_Cube";
-			cube.transform.SetParent(root.transform, false);
-			cube.transform.localPosition = cubeLocalPos;
-			cube.transform.localRotation = Quaternion.identity;
-			cube.transform.localScale = new Vector3(
+			var cube = CreateBakedBoxVisual("AABB_Box", root.transform, cubeLocalPos, new Vector3(
 				Mathf.Max(0.0001f, aabbSize.x),
 				Mathf.Max(0.0001f, aabbSize.y),
 				Mathf.Max(0.0001f, aabbSize.z)
-			);
-
-			// Remove collider to avoid selection blocking, then assign a simple white material
-			var box = cube.GetComponent<BoxCollider>(); if (box != null) Object.DestroyImmediate(box);
-			var renderer = cube.GetComponent<MeshRenderer>();
-			if (renderer != null)
-			{
-				var shader = Shader.Find("Unlit/Color");
-				if (shader == null) shader = Shader.Find("Standard");
-				if (shader != null)
-				{
-					var mat = new Material(shader);
-					if (shader.name == "Unlit/Color") mat.SetColor("_Color", Color.white);
-					else mat.color = Color.white;
-					renderer.sharedMaterial = mat;
-				}
-			}
+			));
 
 			Selection.activeGameObject = root;
 			EditorGUIUtility.PingObject(root);
@@ -1216,6 +1276,109 @@ public class ModSDKWindow : EditorWindow
 		{
 			Debug.LogError($"[ModSDK] Failed to build preview: {ex.Message}");
 		}
+	}
+
+	private void BuildPreviewFromStructure(PublicEntry entry)
+	{
+		PrefabStructure structure = null;
+		try { structure = JsonUtility.FromJson<PrefabStructure>(entry.structure ?? string.Empty); }
+		catch { }
+		if (structure == null || structure.nodes == null || structure.nodes.Count == 0)
+		{
+			Debug.LogWarning($"[ModSDK] Invalid prefab structure for '{entry.address}'.");
+			return;
+		}
+
+	var leaf2 = entry.address;
+	var slashIdx2 = string.IsNullOrEmpty(leaf2) ? -1 : leaf2.LastIndexOf('/') ;
+	if (slashIdx2 >= 0 && slashIdx2 + 1 < leaf2.Length) leaf2 = leaf2.Substring(slashIdx2 + 1);
+	var root = new GameObject(San(leaf2));
+		root.transform.position = Vector3.zero;
+		if (structure.rootScale != Vector3.zero)
+			root.transform.localScale = new Vector3(
+				Mathf.Max(0.0001f, structure.rootScale.x),
+				Mathf.Max(0.0001f, structure.rootScale.y),
+				Mathf.Max(0.0001f, structure.rootScale.z)
+			);
+
+		// Build hierarchy using path strings
+		var pathToGO = new Dictionary<string, GameObject>(StringComparer.Ordinal);
+		foreach (var node in structure.nodes)
+		{
+			if (string.IsNullOrEmpty(node?.path)) continue;
+			var go = EnsureHierarchyPath(root, node.path, pathToGO);
+			var t = go.transform;
+			// Apply local TRS captured
+			t.localPosition = node.lp;
+			t.localEulerAngles = node.lr;
+			t.localScale = node.ls;
+
+			// If node has bounds, add a single baked box whose mesh is offset to match pivot
+			if (node.hasBounds)
+			{
+				var leafName = node.path;
+				var slash = string.IsNullOrEmpty(leafName) ? -1 : leafName.LastIndexOf('/');
+				if (slash >= 0 && slash + 1 < leafName.Length) leafName = leafName.Substring(slash + 1);
+				if (string.IsNullOrEmpty(leafName)) leafName = "Bounds";
+				CreateBakedBoxVisual(leafName, t, -node.pivotOffset, new Vector3(
+					Mathf.Max(0.0001f, node.bSize.x),
+					Mathf.Max(0.0001f, node.bSize.y),
+					Mathf.Max(0.0001f, node.bSize.z)
+				));
+			}
+
+			// Recreate BoxColliders present on this node
+			if (node.boxes != null && node.boxes.Count > 0)
+			{
+				foreach (var bc in node.boxes)
+				{
+					var colGo = new GameObject("BoxColliderVis");
+					colGo.transform.SetParent(t, false);
+					colGo.transform.localPosition = bc.center;
+					colGo.transform.localRotation = Quaternion.identity;
+					colGo.transform.localScale = bc.size;
+					CreateBoxVisual("Collider", colGo.transform, Vector3.zero, Vector3.one);
+					// Add an actual BoxCollider on the node to mirror trigger setting
+					var collider = go.GetComponent<BoxCollider>();
+					if (collider == null) collider = go.AddComponent<BoxCollider>();
+					collider.center = bc.center;
+					collider.size = bc.size;
+					collider.isTrigger = bc.isTrigger;
+				}
+			}
+		}
+
+		Selection.activeGameObject = root;
+		EditorGUIUtility.PingObject(root);
+	}
+
+	private static GameObject EnsureHierarchyPath(GameObject root, string path, Dictionary<string, GameObject> cache)
+	{
+		// Path format: Root/Child/Sub
+		if (cache.TryGetValue(path, out var found)) return found;
+		var parts = path.Split(new[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
+		Transform current = root.transform;
+		var builtPath = root.name;
+		for (int i = 0; i < parts.Length; i++)
+		{
+			var name = parts[i];
+			Transform next = null;
+			for (int c = 0; c < current.childCount; c++)
+			{
+				var ch = current.GetChild(c);
+				if (ch.name == name) { next = ch; break; }
+			}
+			if (next == null)
+			{
+				var go = new GameObject(name);
+				go.transform.SetParent(current, false);
+				next = go.transform;
+			}
+			current = next;
+			builtPath = builtPath + "/" + name;
+			if (!cache.ContainsKey(builtPath)) cache[builtPath] = current.gameObject;
+		}
+		return current.gameObject;
 	}
 
 	private static bool TryParseVec3(string meta, string key, out Vector3 value)
@@ -1285,6 +1448,111 @@ public class ModSDKWindow : EditorWindow
             Debug.LogError($"[ModSDK] Failed to remove override for '{address}': {ex.Message}");
         }
     }
+
+	// Create a named lit box (no physics collider) as a child of parent, with mesh vertices offset so the pivot is baked
+	private static GameObject CreateBakedBoxVisual(string objectName, Transform parent, Vector3 localCenter, Vector3 size)
+	{
+		var go = new GameObject(objectName);
+		go.transform.SetParent(parent, false);
+		go.transform.localPosition = Vector3.zero;
+		go.transform.localRotation = Quaternion.identity;
+		go.transform.localScale = new Vector3(
+			Mathf.Max(0.0001f, size.x),
+			Mathf.Max(0.0001f, size.y),
+			Mathf.Max(0.0001f, size.z)
+		);
+
+		var mf = go.AddComponent<MeshFilter>();
+		var mr = go.AddComponent<MeshRenderer>();
+
+		var src = GetUnitCubeMesh();
+		var srcVerts = src.vertices;
+		var bakedVerts = new Vector3[srcVerts.Length];
+		float sx = Mathf.Max(0.0001f, size.x);
+		float sy = Mathf.Max(0.0001f, size.y);
+		float sz = Mathf.Max(0.0001f, size.z);
+		var offset = new Vector3(
+			localCenter.x / sx, 
+			localCenter.y / sy,
+			localCenter.z / sz
+		);
+		for (int i = 0; i < srcVerts.Length; i++) bakedVerts[i] = srcVerts[i] + offset;
+
+		var mesh = new Mesh();
+		mesh.name = src.name + "_BakedPivot";
+		mesh.vertices = bakedVerts;
+		mesh.triangles = src.triangles;
+		mesh.normals = src.normals;
+		mesh.RecalculateBounds();
+		mf.sharedMesh = mesh;
+
+		mr.shadowCastingMode = ShadowCastingMode.On;
+		mr.receiveShadows = true;
+		var mat = GetDefaultLitMaterial();
+		if (mat != null) mr.sharedMaterial = mat;
+		return go;
+	}
+
+	// Create a named lit box (no physics collider) as a child of parent, centered at localPos and scaled to size
+	private static GameObject CreateBoxVisual(string namePrefix, Transform parent, Vector3 localPos, Vector3 size)
+	{
+		var go = new GameObject($"{namePrefix}_Box");
+		go.transform.SetParent(parent, false);
+		go.transform.localPosition = localPos;
+		go.transform.localRotation = Quaternion.identity;
+		go.transform.localScale = size;
+
+		var mf = go.AddComponent<MeshFilter>();
+		var mr = go.AddComponent<MeshRenderer>();
+		mf.sharedMesh = GetUnitCubeMesh();
+		mr.shadowCastingMode = ShadowCastingMode.On;
+		mr.receiveShadows = true;
+		var mat = GetDefaultLitMaterial();
+		if (mat != null) mr.sharedMaterial = mat;
+		return go;
+	}
+
+	// Returns a cached unit cube mesh (1x1x1) centered at origin
+	private static Mesh unitCubeMesh;
+	private static Mesh GetUnitCubeMesh()
+	{
+		if (unitCubeMesh != null) return unitCubeMesh;
+		var m = new Mesh();
+		m.name = "UnitCube";
+		var v = new Vector3[]
+		{
+			new Vector3(-0.5f,-0.5f,-0.5f), new Vector3( 0.5f,-0.5f,-0.5f), new Vector3( 0.5f, 0.5f,-0.5f), new Vector3(-0.5f, 0.5f,-0.5f), // back
+			new Vector3(-0.5f,-0.5f, 0.5f), new Vector3( 0.5f,-0.5f, 0.5f), new Vector3( 0.5f, 0.5f, 0.5f), new Vector3(-0.5f, 0.5f, 0.5f)  // front
+		};
+		var t = new int[]
+		{
+			0,2,1, 0,3,2, // back
+			4,5,6, 4,6,7, // front
+			0,1,5, 0,5,4, // bottom
+			2,3,7, 2,7,6, // top
+			1,2,6, 1,6,5, // right
+			3,0,4, 3,4,7  // left
+		};
+		m.SetVertices(v);
+		m.SetTriangles(t, 0);
+		m.RecalculateNormals();
+		m.RecalculateBounds();
+		unitCubeMesh = m;
+		return m;
+	}
+
+	// Simple default lit material for previews
+	private static Material defaultLitMaterial;
+	private static Material GetDefaultLitMaterial()
+	{
+		if (defaultLitMaterial != null) return defaultLitMaterial;
+		Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+		if (shader == null) shader = Shader.Find("HDRP/Lit");
+		if (shader == null) shader = Shader.Find("Standard");
+		if (shader == null) return null;
+		defaultLitMaterial = new Material(shader);
+		return defaultLitMaterial;
+	}
 
     // Auto mode removed per updated UX
 
@@ -1868,7 +2136,9 @@ public class ModSDKWindow : EditorWindow
                     type = Grab("type"),
                     labels = Grab("labels"),
                     role = Grab("role"),
-                    meta = Grab("meta")
+                    meta = Grab("meta"),
+                    structure = Grab("structure"),
+                    notes = Grab("notes")
                 });
             }
         }
