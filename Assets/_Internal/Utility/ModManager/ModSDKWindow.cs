@@ -3,10 +3,12 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
+using UnityEditor.Compilation;
 using UnityEditor.AddressableAssets.Settings.GroupSchemas;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -608,6 +610,7 @@ public class ModSDKWindow : EditorWindow
                                 if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
                             }
                         }
+                        // Code packaging uses 'code/' under the selected mod automatically; no extra UI needed
                         if (GUILayout.Button("Build Mod"))
                             BuildMod();
                         EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
@@ -1837,6 +1840,9 @@ public class ModSDKWindow : EditorWindow
                 File.WriteAllText(infoPath, info);
             }
 
+            // Optional: include code payload and manifest (compile C# under code/ or copy prebuilt DLLs)
+            WriteOrBuildCodePayload(outDir);
+
             // Quick check: report expected load path and whether a catalog is present
             var expectedLoadPath = bundled.LoadPath.GetValue(buildSettings);
             var catalogs = Directory.GetFiles(outDir, "catalog*.*", SearchOption.AllDirectories).Length;
@@ -1897,6 +1903,19 @@ public class ModSDKWindow : EditorWindow
 			if (settings == null)
 			{
 				Directory.CreateDirectory(newRoot);
+				// Ensure a 'Code' source folder exists to guide modders
+				var codeSrc = Path.Combine(newRoot, "Code");
+				if (!Directory.Exists(codeSrc)) Directory.CreateDirectory(codeSrc);
+				settings = AddressableAssetSettings.Create(newRoot, "AddressableAssetSettings", true, true);
+				AssetDatabase.SaveAssets();
+				AssetDatabase.Refresh();
+			}
+			if (settings == null)
+			{
+				Directory.CreateDirectory(newRoot);
+				// Ensure a 'Code' source folder exists to guide modders
+				var codeSrc = Path.Combine(newRoot, "Code");
+				if (!Directory.Exists(codeSrc)) Directory.CreateDirectory(codeSrc);
 				settings = AddressableAssetSettings.Create(newRoot, "AddressableAssetSettings", true, true);
 				AssetDatabase.SaveAssets();
 				AssetDatabase.Refresh();
@@ -1967,6 +1986,191 @@ public class ModSDKWindow : EditorWindow
         {
             Debug.LogWarning($"[ModSDK] Catalog tokenization skipped/failed: {ex.Message}");
         }
+    }
+
+    // ---------- Optional code packaging (Harmony) ----------
+	private async void WriteOrBuildCodePayload(string outDir)
+    {
+        try
+        {
+			// Determine source folder from selected mod automatically: Assets/My_Mods/<ModName>/Code (fallback: code)
+			var working = Path.Combine(GetWorkingRootAssetPath(), San(modName));
+			var srcFolder = Path.Combine(working, "Code");
+			if (!Directory.Exists(srcFolder)) srcFolder = Path.Combine(working, "code");
+			if (string.IsNullOrEmpty(srcFolder) || !Directory.Exists(srcFolder)) return;
+
+            // Prefer compiling .cs into a DLL
+            var csFiles = Directory.GetFiles(srcFolder, "*.cs", SearchOption.AllDirectories);
+            var outCodeDir = Path.Combine(outDir, "code");
+            Directory.CreateDirectory(outCodeDir);
+
+            var builtDlls = new List<string>();
+            if (csFiles != null && csFiles.Length > 0)
+            {
+                var targetName = San(modName) + ".dll";
+                var targetPath = Path.Combine(outCodeDir, targetName);
+                if (!await BuildCSharpToDllAsync(csFiles, targetPath))
+                {
+                    Debug.LogWarning($"[ModSDK] Code compile failed; will try copying prebuilt DLLs if any.");
+                }
+                else
+                {
+                    builtDlls.Add(targetName);
+                }
+            }
+
+            // Also copy any prebuilt DLLs present (excluding 0Harmony)
+            var dlls = Directory.GetFiles(srcFolder, "*.dll", SearchOption.TopDirectoryOnly);
+            var copied = new List<string>();
+            if (dlls != null)
+            {
+                foreach (var src in dlls)
+                {
+                    var name = Path.GetFileName(src);
+                    if (string.Equals(name, "0Harmony.dll", StringComparison.OrdinalIgnoreCase)) continue;
+                    // Skip the one we just compiled if srcFolder is under outDir/code
+                    var dst = Path.Combine(outCodeDir, name);
+                    try { File.Copy(src, dst, true); copied.Add(name); }
+                    catch (Exception ex) { Debug.LogWarning($"[ModSDK] Copy DLL failed '{name}': {ex.Message}"); }
+                }
+            }
+            var assembliesList = new List<string>();
+            assembliesList.AddRange(builtDlls);
+            assembliesList.AddRange(copied);
+            if (assembliesList.Count == 0) return; // nothing to package
+
+            // Build manifest JSON
+            var harmonyId = San(modName);
+            var entries = new List<string>();
+
+            string JsonList(IEnumerable<string> items)
+            {
+                var list = items != null ? items.ToList() : new List<string>();
+                for (int i = 0; i < list.Count; i++) list[i] = "\"" + Escape(list[i]) + "\"";
+                return "[" + string.Join(", ", list) + "]";
+            }
+
+            var json = "{\n" +
+                       $"  \"harmonyId\": \"{Escape(harmonyId)}\",\n" +
+                       $"  \"assemblies\": {JsonList(assembliesList)},\n" +
+                       $"  \"entryTypes\": {JsonList(entries)}\n" +
+                       "}\n";
+
+            var manifestPath = Path.Combine(outDir, "mod.code.json");
+            File.WriteAllText(manifestPath, json);
+            Debug.Log($"[ModSDK] Wrote code manifest with {assembliesList.Count} DLL(s): {manifestPath}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[ModSDK] Code packaging skipped/failed: {ex.Message}");
+        }
+    }
+
+    private static Task<bool> BuildCSharpToDllAsync(string[] csFiles, string outputPath)
+    {
+        var tcs = new TaskCompletionSource<bool>();
+        try
+        {
+            if (csFiles == null || csFiles.Length == 0)
+            {
+                tcs.SetResult(false);
+                return tcs.Task;
+            }
+            var asmName = Path.GetFileNameWithoutExtension(outputPath);
+            // Ensure SDK helper is compiled into the mod DLL so STN.ModSDK.HarmonyTargets resolves
+            var sourceList = (csFiles ?? Array.Empty<string>()).ToList();
+            try
+            {
+                var helperRel = "Assets/_Internal/Utility/ModManager/HarmonyTargets.cs";
+                var helperAbs = GetAbsoluteFilePath(helperRel);
+                if (!string.IsNullOrEmpty(helperAbs) && File.Exists(helperAbs))
+                {
+                    bool alreadyIncluded = sourceList.Any(p => p.EndsWith("HarmonyTargets.cs", StringComparison.OrdinalIgnoreCase));
+                    if (!alreadyIncluded) sourceList.Add(helperAbs);
+                }
+            }
+            catch { }
+            var builder = new AssemblyBuilder(outputPath, sourceList.ToArray());
+            // Target runtime compatible with project's API compatibility level
+            builder.compilerOptions = new ScriptCompilerOptions
+            {
+                ApiCompatibilityLevel = PlayerSettings.GetApiCompatibilityLevel(EditorUserBuildSettings.selectedBuildTargetGroup)
+            };
+            // Add default references: UnityEngine, UnityEditor (if needed), and 0Harmony if present in project
+            var refs = new List<string>();
+            TryAddRef(references: refs, asmName: "UnityEngine.dll");
+#if UNITY_EDITOR
+            TryAddRef(references: refs, asmName: "UnityEditor.dll");
+#endif
+            // Try find 0Harmony.dll in project (Assets/**)
+            TryAddHarmonyRef(refs);
+            builder.additionalReferences = refs.ToArray();
+            Debug.Log($"[ModSDK] Using {builder.additionalReferences.Length} compiler reference(s): {string.Join(", ", builder.additionalReferences)}");
+
+            builder.buildFinished += (path, messages) =>
+            {
+                var success = messages == null || !messages.Any(m => m.type == CompilerMessageType.Error);
+                if (messages != null)
+                {
+                    foreach (var m in messages) Debug.Log((m.type == CompilerMessageType.Error ? "[ModSDK] (code) ERROR: " : "[ModSDK] (code) ") + m.message);
+                }
+                tcs.TrySetResult(success && File.Exists(outputPath));
+            };
+            if (!builder.Build())
+            {
+                Debug.LogWarning("[ModSDK] AssemblyBuilder failed to start.");
+                tcs.TrySetResult(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[ModSDK] BuildCSharpToDll failed: {ex.Message}");
+            tcs.TrySetResult(false);
+        }
+        return tcs.Task;
+    }
+
+    private static void TryAddHarmonyRef(List<string> references)
+    {
+        try
+        {
+            // 1) Prefer exact file-name match anywhere under Assets
+            var all = AssetDatabase.FindAssets("0Harmony");
+            if (all != null && all.Length > 0)
+            {
+                foreach (var g in all)
+                {
+                    var p = AssetDatabase.GUIDToAssetPath(g);
+                    if (string.IsNullOrEmpty(p) || !p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!p.EndsWith("/0Harmony.dll", StringComparison.OrdinalIgnoreCase) && !p.EndsWith("\\0Harmony.dll", StringComparison.OrdinalIgnoreCase)) continue;
+                    var abs0 = GetAbsoluteFilePath(p);
+                    if (!string.IsNullOrEmpty(abs0) && File.Exists(abs0)) { references.Add(abs0); return; }
+                }
+            }
+        }
+        catch { }
+        // 2) Fallback: try common location under Assets/Plugins/Harmony/0Harmony.dll
+        var fallback = GetAbsoluteFilePath("Assets/Plugins/Harmony/0Harmony.dll");
+        if (!string.IsNullOrEmpty(fallback) && File.Exists(fallback)) { references.Add(fallback); return; }
+        // 3) Last resort: scan disk under Assets for any 0Harmony.dll
+        try
+        {
+            var any = Directory.GetFiles(Application.dataPath, "0Harmony.dll", SearchOption.AllDirectories).FirstOrDefault();
+            if (!string.IsNullOrEmpty(any) && File.Exists(any)) references.Add(any);
+        }
+        catch { }
+    }
+
+    private static void TryAddRef(List<string> references, string asmName)
+    {
+        try
+        {
+            var unityDir = EditorApplication.applicationContentsPath;
+            var monoLib = Path.Combine(unityDir, "MonoBleedingEdge/lib/mono/4.7.1");
+            var file = Path.Combine(monoLib, asmName);
+            if (File.Exists(file)) { references.Add(file); return; }
+        }
+        catch { }
     }
 
     // ---------- Helpers ----------
