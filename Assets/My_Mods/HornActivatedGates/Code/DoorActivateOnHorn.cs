@@ -17,7 +17,7 @@ static class DoorActivateOnHorn
 
     // Tweakable settings for the example mod
     const bool DEBUG = true;                  // Set false to silence informational logs
-    const float CloseDelaySeconds = 10f;      // First close attempt after opening
+    const float CloseDelaySeconds = 5f;      // First close attempt after opening
     const float RetryDelaySeconds = 5f;       // Delay between retries when obstructed
     const int MaxCloseAttempts = 3;           // Total attempts when obstructed
 
@@ -51,23 +51,28 @@ static class DoorActivateOnHorn
     static void TryOpenNearbyDoors(Vector3 origin, float radius, int maxDoors)
     {
         EnsureReflection();
+        if (DEBUG)
+        {
+            Debug.Log($"[HornGates] Types: OM={(s_ObjectMetaType!=null)}, MI={(s_MachineInteractionType!=null)}, DoorBlocker={(s_DoorBlockerType!=null)}");
+            Debug.Log($"[HornGates] Members: MI.Activate={(s_MI_ActivateInstantiating!=null)}, OM.typeID={(s_OM_TypeId!=null)}, OM.objectID={(s_OM_ObjectId!=null)}, OM.Deactivate={(s_OM_Deactivate!=null)}, DB.DoorIsBlocked={(s_DB_DoorIsBlocked!=null)}");
+        }
 
-        int hitCount;
+        Collider[] hits;
         try
         {
-            hitCount = Physics.OverlapSphereNonAlloc(origin, radius, s_Overlap, ~0, QueryTriggerInteraction.Collide);
+            hits = Physics.OverlapSphere(origin, radius, ~0, QueryTriggerInteraction.Collide);
         }
         catch (System.Exception ex)
         {
-            Debug.LogWarning($"[HornGates] OverlapSphereNonAlloc failed: {ex.Message}");
+            Debug.LogWarning($"[HornGates] OverlapSphere failed: {ex.Message}");
             return;
         }
-        if (hitCount <= 0)
+        if (hits == null || hits.Length == 0)
         {
             if (DEBUG) Debug.Log("[HornGates] OverlapSphere found 0 colliders");
             return;
         }
-        if (DEBUG) Debug.Log($"[HornGates] OverlapSphere hits: {hitCount}");
+        if (DEBUG) Debug.Log($"[HornGates] OverlapSphere hits: {hits.Length}");
 
         var seenIds = new HashSet<string>(StringComparer.Ordinal);
         var found = 0;
@@ -75,20 +80,45 @@ static class DoorActivateOnHorn
         // Pass 0: Prioritize ObjectMetaData-based gates with known typeIDs
         if (s_ObjectMetaType != null && s_OM_TypeId != null)
         {
-            for (int i = 0; i < hitCount && found < maxDoors; i++)
+            int candidates = 0, activated = 0;
+            for (int i = 0; i < hits.Length && found < maxDoors; i++)
             {
-                var om = s_Overlap[i].GetComponentInParent(s_ObjectMetaType) as Component;
+                var om = hits[i].GetComponentInParent(s_ObjectMetaType) as Component;
                 if (om == null) continue;
                 int typeId = 0;
                 try { typeId = (int)s_OM_TypeId.GetValue(om); } catch { typeId = 0; }
-                if (!s_GateTypeIds.Contains(typeId)) continue;
+                bool hasDoorBlocker = false;
+                if (s_DoorBlockerType != null)
+                {
+                    var dbLocal = om.GetComponent(s_DoorBlockerType);
+                    var dbChild = om.GetComponentInChildren(s_DoorBlockerType, true);
+                    var dbParent = om.GetComponentInParent(s_DoorBlockerType);
+                    hasDoorBlocker = (dbLocal != null) || (dbChild != null) || (dbParent != null);
+                }
+                if (!s_GateTypeIds.Contains(typeId) && !hasDoorBlocker)
+                {
+                    if (DEBUG) Debug.Log($"[HornGates] Skipped OM type {typeId} (not in gate list)");
+                    continue;
+                }
+                if (!s_GateTypeIds.Contains(typeId) && hasDoorBlocker && DEBUG)
+                {
+                    Debug.Log("[HornGates] Using fallback: DoorBlocker present on OM not in gate list");
+                }
+                candidates++;
 
                 string omId = null;
                 try { if (s_OM_ObjectId != null) omId = s_OM_ObjectId.GetValue(om) as string; } catch { omId = null; }
                 if (!string.IsNullOrEmpty(omId) && seenIds.Contains(omId)) continue;
 
                 // Try MachineInteraction first (instantiating gates)
-                var mi = om.GetComponentInChildren(s_MachineInteractionType) ?? om.GetComponentInParent(s_MachineInteractionType);
+                // MachineInteraction may live at various levels; try a few common anchors
+                var mi = om.GetComponent(s_MachineInteractionType)
+                         ?? om.GetComponentInChildren(s_MachineInteractionType, true)
+                         ?? om.GetComponentInParent(s_MachineInteractionType);
+                if (mi == null)
+                {
+                    if (DEBUG) Debug.Log($"[HornGates] Gate candidate type {typeId} but MachineInteraction missing");
+                }
                 if (mi != null && s_MI_ActivateInstantiating != null)
                 {
                     try
@@ -97,6 +127,7 @@ static class DoorActivateOnHorn
                         if (DEBUG) Debug.Log($"[HornGates] Gate(OM type {typeId}) -> ActivateInstantiatingMachineWithPartCheck()");
                         if (!string.IsNullOrEmpty(omId)) seenIds.Add(omId);
                         found++;
+                        activated++;
                         // Schedule close after first delay
                         if (s_OM_Deactivate != null)
                         {
@@ -109,8 +140,8 @@ static class DoorActivateOnHorn
                         if (DEBUG) Debug.LogWarning($"[HornGates] Gate(OM type {typeId}) instantiating activation failed: {ex.Message}");
                     }
                 }
-
             }
+            if (DEBUG) Debug.Log($"[HornGates] Gate candidates={candidates}, activated={activated}");
         }
     }
 
