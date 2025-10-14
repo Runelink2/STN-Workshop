@@ -1704,6 +1704,19 @@ public class ModSDKWindow : EditorWindow
     {
         try
         {
+            // Preserve WorkshopID from previous build (if present) before cleaning outDir
+            string preservedWorkshopId = null;
+            try
+            {
+                var prevInfo = Path.Combine(outDir, "modinfo.json");
+                if (Directory.Exists(outDir) && File.Exists(prevInfo))
+                {
+                    var prevText = File.ReadAllText(prevInfo);
+                    preservedWorkshopId = ExtractWorkshopId(prevText);
+                }
+            }
+            catch { /* ignore */ }
+
             // Full clean: ensure destination is empty before building into it
             try
             {
@@ -1826,15 +1839,19 @@ public class ModSDKWindow : EditorWindow
                 }
             }
 
-            // Write a minimal modinfo.json if not present
+            // Write a minimal modinfo.json if not present (preserving WorkshopID if we captured one)
             var infoPath = Path.Combine(outDir, "modinfo.json");
             if (!File.Exists(infoPath))
             {
+                var workshopLine = !string.IsNullOrEmpty(preservedWorkshopId)
+                    ? $"  \"workshopID\": \"{Escape(preservedWorkshopId)}\",\n"
+                    : string.Empty;
                 var info = "{\n" +
                            $"  \"name\": \"{Escape(modName)}\",\n" +
                            $"  \"version\": \"{Escape(modVersion)}\",\n" +
                            $"  \"gameVersion\": \"{Escape(PlayerSettings.bundleVersion)}\",\n" +
                            $"  \"unity\": \"{Escape(Application.unityVersion)}\",\n" +
+                           workshopLine +
                            $"  \"builtUtc\": \"{DateTime.UtcNow:O}\"\n" +
                            "}\n";
                 File.WriteAllText(infoPath, info);
@@ -2235,6 +2252,19 @@ public class ModSDKWindow : EditorWindow
         char.IsLetterOrDigit(ch) || ch=='_' || ch=='-' || ch=='(' || ch==')' ? ch : '_'));
 
     private static string Escape(string s) => (s ?? "").Replace("\\","\\\\").Replace("\"","\\\"");
+
+	private static string ExtractWorkshopId(string json)
+	{
+		if (string.IsNullOrEmpty(json)) return null;
+		var keys = new [] { "workshopId", "workshopID", "id", "WorkshopID" };
+		foreach (var key in keys)
+		{
+			var rx = new System.Text.RegularExpressions.Regex("\\\"" + System.Text.RegularExpressions.Regex.Escape(key) + "\\\"\\s*:\\s*\\\"?([0-9]+)\\\"?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+			var m = rx.Match(json);
+			if (m.Success) return m.Groups[1].Value;
+		}
+		return null;
+	}
 
     private static string GetAbsoluteFilePath(string assetOrRelativePath)
     {
