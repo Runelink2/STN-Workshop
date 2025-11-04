@@ -1,4 +1,3 @@
-#if UNITY_EDITOR
 using System;
 using System.Reflection;
 using HarmonyLib;
@@ -45,4 +44,3 @@ static class ServerDebug
 		if (s_IsServerField == null && s_ServerType != null) s_IsServerField = STN.ModSDK.HarmonyTargets.Field(s_ServerType, "IsServer");
 	}
 }
-#endif
