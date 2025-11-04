@@ -15,6 +15,7 @@ using UnityEngine.Rendering;
 using UnityEngine.AddressableAssets;
 using UnityEditor.AddressableAssets.Build;
 using UnityEditor.AddressableAssets.Build.DataBuilders;
+using System.Text.RegularExpressions;
 using Object = UnityEngine.Object;
 using STN.ModSDK;
 
@@ -77,6 +78,11 @@ public class ModSDKWindow : EditorWindow
 		private HashSet<string> overridesExpanded = new HashSet<string>();
 		private static readonly Color TintOverride = new Color(0.45f, 1.00f, 0.45f, 1f);
 		private static readonly Color TintSelected = new Color(1.00f, 0.85f, 0.35f, 1f);
+
+    // ---------- ModInfo flags (client/server) ----------
+    private bool modIsClient = true;   // default to client-enabled for back-compat
+    private bool modIsServer = false;  // default to server-disabled for back-compat
+    private string flagsLoadedForMod = null; // track which mod flags were loaded for
 
 	// ---------- Working root (configurable) ----------
 	private const string DefaultWorkingRootName = "My_Mods";
@@ -150,6 +156,8 @@ public class ModSDKWindow : EditorWindow
         publicJsonPath = DefaultPublicJsonPath;
         LoadPublicAddresses();
         AutoSelectFirstModIfAvailable();
+        // Load flags for initial mod selection
+        flagsLoadedForMod = null; // force reload on first EnsureModFlagsLoaded
         // Ensure UI reflects Project selection changes immediately
         try { Selection.selectionChanged += Repaint; } catch { }
     }
@@ -396,6 +404,11 @@ public class ModSDKWindow : EditorWindow
             EditorGUILayout.HelpBox("Select or create a mod above to continue.", MessageType.Info);
             return;
         }
+        else
+        {
+            // keep flags in sync with the active mod selection
+            EnsureModFlagsLoaded();
+        }
 
         // ASSIGN + OVERRIDES side-by-side
         EditorGUILayout.Space(4);
@@ -599,6 +612,24 @@ public class ModSDKWindow : EditorWindow
                     EditorGUILayout.LabelField("Build Mod", EditorStyles.boldLabel);
                     using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                     {
+                        // Ensure mod flags are loaded for the current selection
+                        EnsureModFlagsLoaded();
+
+                        // Code Targets (Client/Server) toggles
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            EditorGUILayout.LabelField("Code Targets", GUILayout.Width(100));
+                            var newClient = EditorGUILayout.ToggleLeft(new GUIContent("Client", "Apply Harmony code on clients"), modIsClient, GUILayout.Width(80));
+                            var newServer = EditorGUILayout.ToggleLeft(new GUIContent("Server", "Apply Harmony code on dedicated servers"), modIsServer, GUILayout.Width(80));
+                            if (newClient != modIsClient || newServer != modIsServer)
+                            {
+                                modIsClient = newClient;
+                                modIsServer = newServer;
+                                SaveModFlagsToWorkingModInfo();
+                            }
+                            GUILayout.FlexibleSpace();
+                        }
+                        EditorGUILayout.Space(4);
                         using (new EditorGUILayout.HorizontalScope())
                         {
                             EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
@@ -1773,6 +1804,25 @@ public class ModSDKWindow : EditorWindow
             bundled.BuildPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalBuildPath);
             bundled.LoadPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalLoadPath);
 
+            // Prune the Built In Data 'EditorSceneList' entry so Scenes In Build are not added to this per‑mod catalog
+            try
+            {
+                foreach (var g in buildSettings.groups.ToList())
+                {
+                    if (g == null) continue;
+                    var entries = g.entries != null ? g.entries.ToList() : new List<AddressableAssetEntry>();
+                    foreach (var e in entries)
+                    {
+                        if (e == null) continue;
+                        if (string.Equals(e.guid, "EditorSceneList", StringComparison.Ordinal))
+                        {
+                            buildSettings.RemoveAssetEntry(e.guid);
+                        }
+                    }
+                }
+            }
+            catch { }
+
             // Ensure a Player data builder exists and is active (Packed Mode)
             var builderPath = Path.Combine(buildRoot, "BuildScriptPackedMode.asset");
             var packedBuilder = ScriptableObject.CreateInstance<BuildScriptPackedMode>();
@@ -1827,22 +1877,19 @@ public class ModSDKWindow : EditorWindow
                     try { File.Copy(file, dst, true); copiedCatalogs++; } catch { }
                 }
             }
-            // Also try the Library aa cache used by Addressables for this build target
-            var libraryAA = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "Library", "com.unity.addressables", "aa", platform);
-            if (Directory.Exists(libraryAA))
+            // Do not fall back to copying the main project catalog from Library; per‑mod catalogs must originate from the temp build
+            if (copiedCatalogs == 0)
             {
-                foreach (var file in Directory.GetFiles(libraryAA, "catalog*.*", SearchOption.AllDirectories))
-                {
-                    var name = Path.GetFileName(file);
-                    var dst = Path.Combine(outDir, name);
-                    try { if (!File.Exists(dst)) { File.Copy(file, dst, true); copiedCatalogs++; } } catch { }
-                }
+                Debug.LogWarning("[ModSDK] No per‑mod catalog files were produced. Ensure your mod has addressable entries labeled for this mod.");
             }
 
-            // Write a minimal modinfo.json if not present (preserving WorkshopID if we captured one)
+            // Write a minimal modinfo.json if not present (preserving WorkshopID if we captured one) and include code target flags
             var infoPath = Path.Combine(outDir, "modinfo.json");
             if (!File.Exists(infoPath))
             {
+                // Load flags (and optional preserved fields) from working modinfo.json if present
+                bool buildIsClient = true, buildIsServer = false;
+                LoadFlagsFromWorkingModInfo(out buildIsClient, out buildIsServer);
                 var workshopLine = !string.IsNullOrEmpty(preservedWorkshopId)
                     ? $"  \"workshopID\": \"{Escape(preservedWorkshopId)}\",\n"
                     : string.Empty;
@@ -1852,9 +1899,25 @@ public class ModSDKWindow : EditorWindow
                            $"  \"gameVersion\": \"{Escape(PlayerSettings.bundleVersion)}\",\n" +
                            $"  \"unity\": \"{Escape(Application.unityVersion)}\",\n" +
                            workshopLine +
+                           $"  \"isClient\": {(buildIsClient ? "true" : "false")},\n" +
+                           $"  \"isServer\": {(buildIsServer ? "true" : "false")},\n" +
                            $"  \"builtUtc\": \"{DateTime.UtcNow:O}\"\n" +
                            "}\n";
                 File.WriteAllText(infoPath, info);
+            }
+            else
+            {
+                // If modinfo.json exists, upsert the isClient/isServer flags to reflect UI state
+                try
+                {
+                    bool buildIsClient = modIsClient;
+                    bool buildIsServer = modIsServer;
+                    var text = File.ReadAllText(infoPath);
+                    text = UpsertBooleanJson(text, "isClient", buildIsClient);
+                    text = UpsertBooleanJson(text, "isServer", buildIsServer);
+                    File.WriteAllText(infoPath, text);
+                }
+                catch { }
             }
 
             // Optional: include code payload and manifest (compile C# under code/ or copy prebuilt DLLs)
@@ -2353,6 +2416,89 @@ public class ModSDKWindow : EditorWindow
             }
         }
         catch { }
+    }
+
+    // ---------- Mod Flags: load/save from working mod folder ----------
+    private void EnsureModFlagsLoaded()
+    {
+        try
+        {
+            var current = San(modName);
+            if (string.Equals(flagsLoadedForMod, current, StringComparison.Ordinal)) return;
+            bool isC = true, isS = false;
+            LoadFlagsFromWorkingModInfo(out isC, out isS);
+            modIsClient = isC;
+            modIsServer = isS;
+            flagsLoadedForMod = current;
+        }
+        catch { }
+    }
+
+    private void LoadFlagsFromWorkingModInfo(out bool isClient, out bool isServer)
+    {
+        isClient = true; // back-compat default
+        isServer = false;
+        try
+        {
+            var working = Path.Combine(GetWorkingRootAssetPath(), San(modName));
+            var infoPath = Path.Combine(working, "modinfo.json");
+            if (!File.Exists(infoPath)) return;
+            var json = File.ReadAllText(infoPath);
+            // naive boolean extraction tolerant to whitespace/casing
+            bool? ReadBool(string key)
+            {
+                try
+                {
+                    var rx = new Regex("\\\"" + Regex.Escape(key) + "\\\"\\s*:\\s*(true|false)", RegexOptions.IgnoreCase);
+                    var m = rx.Match(json);
+                    if (m.Success) return string.Equals(m.Groups[1].Value, "true", StringComparison.OrdinalIgnoreCase);
+                    return null;
+                }
+                catch { return null; }
+            }
+            var c = ReadBool("isClient");
+            var s = ReadBool("isServer");
+            if (c.HasValue) isClient = c.Value;
+            if (s.HasValue) isServer = s.Value;
+        }
+        catch { }
+    }
+
+    private void SaveModFlagsToWorkingModInfo()
+    {
+        try
+        {
+            var working = Path.Combine(GetWorkingRootAssetPath(), San(modName));
+            var infoPath = Path.Combine(working, "modinfo.json");
+            string json = "{\n}\n";
+            try { if (File.Exists(infoPath)) json = File.ReadAllText(infoPath); } catch { }
+            json = UpsertBooleanJson(json, "isClient", modIsClient);
+            json = UpsertBooleanJson(json, "isServer", modIsServer);
+            File.WriteAllText(infoPath, json);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[ModSDK] Failed to save mod flags: {ex.Message}");
+        }
+    }
+
+    private static string UpsertBooleanJson(string json, string key, bool value)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(json)) json = "{\n}\n";
+            var rx = new Regex("\\\"" + Regex.Escape(key) + "\\\"\\s*:\\s*(true|false)", RegexOptions.IgnoreCase);
+            var replacement = $"\"{key}\": {(value ? "true" : "false")}";
+            if (rx.IsMatch(json)) return rx.Replace(json, replacement);
+            // Insert before closing brace
+            var idx = json.LastIndexOf('}');
+            if (idx < 0) return "{\n  " + replacement + "\n}\n";
+            // Determine comma
+            var prefix = json.Substring(0, idx).TrimEnd();
+            var comma = prefix.EndsWith("{") ? "  " : ",\n  ";
+            return json.Substring(0, idx) + comma + replacement + "\n}";
+        }
+        catch { return json; }
     }
 
 	private List<string> GetAvailableModNames()
