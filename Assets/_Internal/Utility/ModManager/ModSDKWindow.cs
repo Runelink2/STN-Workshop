@@ -638,7 +638,33 @@ public class ModSDKWindow : EditorWindow
                             {
                                 var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
                                 var picked = EditorUtility.OpenFolderPanel("Choose Mod Output Folder", start, "");
-                                if (!string.IsNullOrEmpty(picked)) modOutputDir = picked;
+								if (!string.IsNullOrEmpty(picked))
+								{
+									// Reject selecting the working mod folder (or any parent/child) to prevent destructive overwrites
+									var pickedAbs = NormalizePath(picked);
+									var workingAsset = Path.Combine(GetWorkingRootAssetPath(), San(modName));
+									var workingAbs = NormalizePath(GetAbsoluteFilePath(workingAsset));
+									var legacyAsset = Path.Combine(LegacyRootAssetPath(), San(modName));
+									var legacyAbs = NormalizePath(GetAbsoluteFilePath(legacyAsset));
+									if (!string.IsNullOrEmpty(pickedAbs) && (
+										(!string.IsNullOrEmpty(workingAbs) && PathsOverlap(pickedAbs, workingAbs)) ||
+										(!string.IsNullOrEmpty(legacyAbs) && PathsOverlap(pickedAbs, legacyAbs))
+									))
+									{
+										EditorUtility.DisplayDialog(
+											"Unsafe Output Folder",
+											"Cannot set the Mod Output Folder to the mod's working directory, or any of its parents/children.\n\n" +
+											$"Mod: {modName}\n" +
+											$"Working: {workingAbs}\n\n" +
+											"Please choose a different folder (e.g. a path under your project's Builds folder).",
+											"OK"
+										);
+									}
+									else
+									{
+										modOutputDir = pickedAbs;
+									}
+								}
                             }
                         }
                         // Code packaging uses 'code/' under the selected mod automatically; no extra UI needed
@@ -1735,6 +1761,21 @@ public class ModSDKWindow : EditorWindow
     {
         try
         {
+			// Safety: never build into the working mod folder (or any parent/child), as this method cleans the output directory
+			var absOutDir = NormalizePath(outDir);
+			if (IsUnsafeOutputDir(absOutDir))
+			{
+				EditorUtility.DisplayDialog(
+					"Unsafe Output Folder",
+					"Refusing to build into the mod's working directory (or any of its parents/children), as it would overwrite source files.\n\n" +
+					$"Output: {absOutDir}\n" +
+					$"Mod: {modName}\n\n" +
+					"Please choose a different output folder in the Mod SDK UI.",
+					"OK"
+				);
+				return;
+			}
+
             // Preserve WorkshopID from previous build (if present) before cleaning outDir
             string preservedWorkshopId = null;
             try
@@ -2360,6 +2401,32 @@ public class ModSDKWindow : EditorWindow
         if (string.IsNullOrEmpty(path)) return string.Empty;
         return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
+
+	// Returns true if the two paths overlap in the directory tree (same, ancestor, or descendant)
+	private static bool PathsOverlap(string pathA, string pathB)
+	{
+		if (string.IsNullOrEmpty(pathA) || string.IsNullOrEmpty(pathB)) return false;
+		var a = NormalizeDir(pathA);
+		var b = NormalizeDir(pathB);
+		return a.StartsWith(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(a, StringComparison.OrdinalIgnoreCase);
+	}
+
+	// Safety gate: output directory must not overlap the working mod folder (new or legacy roots)
+	private bool IsUnsafeOutputDir(string outDirAbs)
+	{
+		try
+		{
+			if (string.IsNullOrEmpty(outDirAbs)) return true;
+			var workingAsset = Path.Combine(GetWorkingRootAssetPath(), San(modName));
+			var legacyAsset  = Path.Combine(LegacyRootAssetPath(), San(modName));
+			var workingAbs = NormalizePath(GetAbsoluteFilePath(workingAsset));
+			var legacyAbs  = NormalizePath(GetAbsoluteFilePath(legacyAsset));
+			if (!string.IsNullOrEmpty(workingAbs) && PathsOverlap(outDirAbs, workingAbs)) return true;
+			if (!string.IsNullOrEmpty(legacyAbs) && PathsOverlap(outDirAbs, legacyAbs)) return true;
+			return false;
+		}
+		catch { return true; }
+	}
 
     private static string MakeRelative(string baseDir, string fullPath)
     {
