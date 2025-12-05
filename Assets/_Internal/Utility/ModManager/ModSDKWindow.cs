@@ -1820,30 +1820,43 @@ public class ModSDKWindow : EditorWindow
             profiles.SetValue(profileId, AddressableAssetSettings.kLocalLoadPath, modRoot);
 
             // Create a group and mirror entries from sourceGroup that belong to this mod only
-            var schemas = new List<AddressableAssetGroupSchema>();
-            var bundled = ScriptableObject.CreateInstance<BundledAssetGroupSchema>();
-            bundled.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
-            bundled.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackSeparately;
-            schemas.Add(bundled);
-            var update = ScriptableObject.CreateInstance<ContentUpdateGroupSchema>();
-            update.StaticContent = false;
-            schemas.Add(update);
-
-            var modGroup = buildSettings.CreateGroup("ModContent", false, false, false, schemas,
+            var modGroup = buildSettings.CreateGroup("ModContent", false, false, false, null,
                 typeof(BundledAssetGroupSchema), typeof(ContentUpdateGroupSchema));
+            var bundled = modGroup.GetSchema<BundledAssetGroupSchema>();
+            if (bundled != null)
+            {
+                bundled.Compression = BundledAssetGroupSchema.BundleCompressionMode.LZ4;
+                bundled.BundleMode = BundledAssetGroupSchema.BundlePackingMode.PackSeparately;
+            }
+            var update = modGroup.GetSchema<ContentUpdateGroupSchema>();
+            if (update != null)
+            {
+                update.StaticContent = false;
+            }
             buildSettings.DefaultGroup = modGroup;
 
             string modLabel = $"mod:{San(modName)}";
+            int entriesFound = 0;
+            int entriesMatched = 0;
+            Debug.Log($"[ModSDK] Looking for entries with label '{modLabel}' in group '{sourceGroup.name}' ({sourceGroup.entries.Count} total entries)");
             foreach (var e in sourceGroup.entries.ToList())
             {
+                entriesFound++;
                 if (e == null) continue;
+                var labels = e.labels != null ? string.Join(", ", e.labels) : "(none)";
+                Debug.Log($"[ModSDK] Entry: {e.address} | Labels: {labels}");
                 if (!(e.labels != null && e.labels.Contains(modLabel))) continue;
+                entriesMatched++;
                 var entry = buildSettings.CreateOrMoveEntry(e.guid, modGroup);
                 entry.SetAddress(e.address);
             }
+            Debug.Log($"[ModSDK] Found {entriesFound} entries, {entriesMatched} matched label '{modLabel}'");
 
-            bundled.BuildPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalBuildPath);
-            bundled.LoadPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalLoadPath);
+            if (bundled != null)
+            {
+                bundled.BuildPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalBuildPath);
+                bundled.LoadPath.SetVariableByName(buildSettings, AddressableAssetSettings.kLocalLoadPath);
+            }
 
             // Prune the Built In Data 'EditorSceneList' entry so Scenes In Build are not added to this per‑mod catalog
             try
@@ -1903,12 +1916,26 @@ public class ModSDKWindow : EditorWindow
             // Post-build: copy ONLY the per‑mod catalog from the temp build path → outDir
             var platform = PlatformMappingService.GetPlatformPathSubFolder();
             var tempBuildPath = ResolveProfilePath(buildSettings, AddressableAssetSettings.kLocalBuildPath, platform);
+            Debug.Log($"[ModSDK] Looking for catalog in tempBuildPath: '{tempBuildPath}' (exists: {Directory.Exists(tempBuildPath ?? "")})");
+            if (!string.IsNullOrEmpty(tempBuildPath) && Directory.Exists(tempBuildPath))
+            {
+                var allFiles = Directory.GetFiles(tempBuildPath, "*.*", SearchOption.AllDirectories);
+                Debug.Log($"[ModSDK] Files in tempBuildPath: {string.Join(", ", allFiles.Select(Path.GetFileName))}");
+            }
+            // Also check Library/com.unity.addressables for catalog
+            var libraryPath = Path.Combine("Library", "com.unity.addressables", "aa", platform);
+            if (Directory.Exists(libraryPath))
+            {
+                var libFiles = Directory.GetFiles(libraryPath, "*.*", SearchOption.AllDirectories);
+                Debug.Log($"[ModSDK] Files in Library addressables path: {string.Join(", ", libFiles.Select(Path.GetFileName))}");
+            }
             // Clean old catalogs to avoid picking up a platform catalog with StreamingAssets paths
             foreach (var old in Directory.GetFiles(outDir, "catalog*.*", SearchOption.AllDirectories))
             {
                 try { File.Delete(old); } catch { }
             }
             int copiedCatalogs = 0;
+            // First try tempBuildPath
             if (!string.IsNullOrEmpty(tempBuildPath) && Directory.Exists(tempBuildPath))
             {
                 foreach (var file in Directory.GetFiles(tempBuildPath, "catalog*.*", SearchOption.AllDirectories))
@@ -1916,6 +1943,16 @@ public class ModSDKWindow : EditorWindow
                     var name = Path.GetFileName(file);
                     var dst = Path.Combine(outDir, name);
                     try { File.Copy(file, dst, true); copiedCatalogs++; } catch { }
+                }
+            }
+            // If no catalogs found, check Library/com.unity.addressables (where Addressables often puts them)
+            if (copiedCatalogs == 0 && Directory.Exists(libraryPath))
+            {
+                foreach (var file in Directory.GetFiles(libraryPath, "catalog*.*", SearchOption.AllDirectories))
+                {
+                    var name = Path.GetFileName(file);
+                    var dst = Path.Combine(outDir, name);
+                    try { File.Copy(file, dst, true); copiedCatalogs++; Debug.Log($"[ModSDK] Copied catalog from Library: {name}"); } catch { }
                 }
             }
             // Do not fall back to copying the main project catalog from Library; per‑mod catalogs must originate from the temp build

@@ -21,7 +21,8 @@ static class DoorActivateOnHorn
     const float RetryDelaySeconds = 5f;       // Delay between retries when obstructed
     const int MaxCloseAttempts = 3;           // Total attempts when obstructed
 
-    // Cached reflection to avoid repeated lookups
+    // Lazy init: resolving types at class-load time fails because game types aren't registered yet.
+    // Must resolve on first use (inside EnsureReflection) when the game is fully loaded.
     static Type s_ObjectMetaType;
     static Type s_MachineInteractionType;
     static MethodInfo s_MI_ActivateInstantiating;
