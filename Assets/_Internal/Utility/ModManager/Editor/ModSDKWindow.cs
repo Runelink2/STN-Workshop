@@ -78,6 +78,13 @@ public class ModSDKWindow : EditorWindow
 		private HashSet<string> overridesExpanded = new HashSet<string>();
 		private static readonly Color TintOverride = new Color(0.45f, 1.00f, 0.45f, 1f);
 		private static readonly Color TintSelected = new Color(1.00f, 0.85f, 0.35f, 1f);
+		private static readonly Color TintNewContent = new Color(0.55f, 0.85f, 1.00f, 1f);
+
+    // ---------- Add Content UI state ----------
+    private Vector2 scrollAddContent;
+    private string searchAddContent = "";
+    private HashSet<string> addContentExpanded = new HashSet<string>();
+    private string newContentAddress = ""; // address input for adding new content
 
     // ---------- ModInfo flags (client/server) ----------
     private bool modIsClient = true;   // default to client-enabled for back-compat
@@ -108,14 +115,15 @@ public class ModSDKWindow : EditorWindow
 
 	// ---------- Validation state ----------
 	private List<string> lastValidationIssues = new List<string>();
+	private List<string> lastValidationInfo = new List<string>(); // Informational notes (not errors)
 	private bool lastValidationPassed = false;
 
     // ---------- Menu ----------
     [MenuItem("Modding/Open Mod SDK")]
     public static void Open() => GetWindow<ModSDKWindow>("Mod SDK");
 
-    // Quick creator for weapon settings (GunConfig ScriptableObject)
-    [MenuItem("Modding/Create Weapon Settings (GunConfig)")]
+    // Quick creator for weapon settings (GunConfigBase ScriptableObject)
+    [MenuItem("Modding/Create Weapon Settings (GunConfigBase)")]
     public static void CreateWeaponSettings()
     {
         try
@@ -137,7 +145,7 @@ public class ModSDKWindow : EditorWindow
             var defaultPath = System.IO.Path.Combine(targetDir, "ClientWeapon.asset");
             defaultPath = AssetDatabase.GenerateUniqueAssetPath(defaultPath);
 
-            var asset = ScriptableObject.CreateInstance<GunConfig>();
+            var asset = ScriptableObject.CreateInstance<GunConfigBase>();
             AssetDatabase.CreateAsset(asset, defaultPath);
             AssetDatabase.SaveAssets();
             EditorUtility.FocusProjectWindow();
@@ -337,13 +345,36 @@ public class ModSDKWindow : EditorWindow
 									bundled.LoadPath.SetVariableByName(settings, AddressableAssetSettings.kLocalLoadPath);
 									settings.SetDirty(AddressableAssetSettings.ModificationEvent.GroupSchemaModified, group, true, false);
 									AssetDatabase.SaveAssets();
+									
+									// Create default modinfo.json in the working folder
+									try
+									{
+										var modFolder = Path.Combine(GetWorkingRootAssetPath(), newName);
+										var modinfoPath = Path.Combine(modFolder, "modinfo.json");
+										if (!File.Exists(modinfoPath))
+										{
+											var defaultInfo = "{\n  \"isClient\": true,\n  \"isServer\": false\n}\n";
+											File.WriteAllText(modinfoPath, defaultInfo);
+											AssetDatabase.Refresh();
+											Debug.Log($"[ModSDK] Created default modinfo.json for '{newName}'");
+										}
+									}
+									catch (Exception ex)
+									{
+										Debug.LogWarning($"[ModSDK] Could not create modinfo.json: {ex.Message}");
+									}
+									
 									Debug.Log($"[ModSDK] Mod context ready: '{newName}' → {GetWorkingRootAssetPath()}/{newName}");
 									// Offer to switch to the newly created mod
 									var after = EditorUtility.DisplayDialogComplex("Mod created",
-										$"Mod '{newName}' was created. Switch to it now?",
-										"Switch",
-										"Stay",
-										"Reveal Folder");
+										$"Mod '{newName}' was created.\n\n" +
+										$"Your mod folder: Assets/My_Mods/{newName}/\n" +
+										$"Put your scripts in: Assets/My_Mods/{newName}/Code/\n" +
+										$"Put your assets in: Assets/My_Mods/{newName}/Assets/\n\n" +
+										"Do NOT modify files in Assets/_Internal/ - they won't affect your mod.",
+										"Switch to Mod",
+										"Stay Here",
+										"Open Folder");
 									if (after == 0)
 									{
 										modName = newName;
@@ -507,11 +538,12 @@ public class ModSDKWindow : EditorWindow
             }
 
 
-			// RIGHT: Current overrides
+			// RIGHT: Current overrides + Add New Content
 			using (new EditorGUILayout.VerticalScope(GUILayout.Width(colWidth), GUILayout.ExpandHeight(true)))
             {
+				// Mod Overrides section (existing)
 				EditorGUILayout.LabelField("Mod Overrides", EditorStyles.boldLabel);
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.ExpandHeight(true)))
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.Height(position.height * 0.25f)))
                 {
                     searchOverrides = EditorGUILayout.TextField("Search", searchOverrides);
                     var overrides = GetOverrideMapCached();
@@ -552,6 +584,137 @@ public class ModSDKWindow : EditorWindow
                     if (overrides.Count == 0)
                         EditorGUILayout.HelpBox("No overrides found for this mod.", MessageType.Info);
                 }
+
+				EditorGUILayout.Space(4);
+
+				// Add New Content section (NEW)
+				EditorGUILayout.LabelField("Add New Content", EditorStyles.boldLabel);
+				using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox, GUILayout.ExpandHeight(true)))
+				{
+					// Drag & Drop zone for adding content with auto-generated addresses
+					var dropZoneStyle = new GUIStyle(EditorStyles.helpBox);
+					dropZoneStyle.alignment = TextAnchor.MiddleCenter;
+					dropZoneStyle.fontStyle = FontStyle.Bold;
+					dropZoneStyle.fontSize = 11;
+					var dropRect = GUILayoutUtility.GetRect(0, 40, GUILayout.ExpandWidth(true));
+					var evt = Event.current;
+					bool isDragging = (evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) && dropRect.Contains(evt.mousePosition);
+					
+					// Draw drop zone with highlight when dragging
+					var dropColor = isDragging ? new Color(0.3f, 0.6f, 0.9f, 0.3f) : new Color(0.2f, 0.2f, 0.2f, 0.1f);
+					EditorGUI.DrawRect(dropRect, dropColor);
+					GUI.Label(dropRect, "Drop Assets Here\n(auto-generates addresses from path)", dropZoneStyle);
+
+					// Handle drag and drop
+					if (isDragging)
+					{
+						DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+						if (evt.type == EventType.DragPerform)
+						{
+							DragAndDrop.AcceptDrag();
+							var guids = new List<string>();
+							foreach (var obj in DragAndDrop.objectReferences)
+							{
+								var p = AssetDatabase.GetAssetPath(obj);
+								if (string.IsNullOrEmpty(p)) continue;
+								if (Directory.Exists(p))
+								{
+									foreach (var g in AssetDatabase.FindAssets("", new[] { p })) guids.Add(g);
+								}
+								else
+								{
+									var g = AssetDatabase.AssetPathToGUID(p);
+									if (!string.IsNullOrEmpty(g)) guids.Add(g);
+								}
+							}
+							if (guids.Count > 0)
+							{
+								AddContentWithAutoAddresses(guids);
+								cachedOverrideMap = null;
+								lastOverrideRefresh = -1;
+								Repaint();
+							}
+						}
+						evt.Use();
+					}
+
+					EditorGUILayout.Space(4);
+
+					// Manual input for custom address (alternative to drag-drop)
+					using (new EditorGUILayout.HorizontalScope())
+					{
+						EditorGUILayout.LabelField("Or Manual Address:", GUILayout.Width(110));
+						newContentAddress = EditorGUILayout.TextField(newContentAddress);
+					}
+
+					// Suggested prefix hint
+					var suggestedPrefix = $"Mod/{San(modName)}/";
+					if (!string.IsNullOrEmpty(newContentAddress) && !newContentAddress.StartsWith("Mod/", StringComparison.OrdinalIgnoreCase))
+					{
+						EditorGUILayout.HelpBox($"Consider using prefix: {suggestedPrefix} to avoid collisions", MessageType.Warning);
+					}
+
+					// Add button
+					using (new EditorGUILayout.HorizontalScope())
+					{
+						EditorGUI.BeginDisabledGroup(string.IsNullOrWhiteSpace(newContentAddress) || GetSelectedGuids(true).Count == 0);
+						if (GUILayout.Button("Add Selected Asset(s)", GUILayout.Width(160)))
+						{
+							AddCustomContentToMod(newContentAddress.Trim());
+							newContentAddress = "";
+						}
+						EditorGUI.EndDisabledGroup();
+						if (GUILayout.Button("Use Suggested", GUILayout.Width(110)))
+						{
+							newContentAddress = suggestedPrefix;
+						}
+						GUILayout.FlexibleSpace();
+					}
+
+					EditorGUILayout.Space(4);
+
+					// Show list of added content (non-override entries)
+					searchAddContent = EditorGUILayout.TextField("Search Added", searchAddContent);
+					var addedContent = GetAddedContentMap();
+					if (!string.IsNullOrEmpty(searchAddContent))
+					{
+						var q = searchAddContent.Trim().ToLowerInvariant();
+						addedContent = addedContent
+							.Where(kv => (kv.Key ?? "").ToLowerInvariant().Contains(q) || (kv.Value ?? "").ToLowerInvariant().Contains(q))
+							.ToDictionary(k => k.Key, v => v.Value);
+					}
+					EditorGUILayout.LabelField($"Added content: {addedContent.Count} entries", EditorStyles.miniLabel);
+
+					using (new EditorGUILayout.HorizontalScope())
+					{
+						if (GUILayout.Button("Expand All", GUILayout.Width(100)))
+						{
+							addContentExpanded = new HashSet<string>(GetOverrideFolderSet(addedContent));
+						}
+						if (GUILayout.Button("Collapse All", GUILayout.Width(100)))
+						{
+							addContentExpanded.Clear();
+						}
+						GUILayout.FlexibleSpace();
+					}
+
+					using (new EditorGUILayout.VerticalScope(GUILayout.ExpandHeight(true)))
+					{
+						scrollAddContent = EditorGUILayout.BeginScrollView(scrollAddContent, GUILayout.ExpandHeight(true));
+
+						// Build a folder tree from added content addresses
+						var addedEntries = addedContent
+							.Select(kv => new PublicEntry { address = kv.Key, type = "", role = "", labels = "", meta = kv.Value })
+							.ToList();
+						var aRoot = BuildAddressTree(addedEntries);
+						DrawAddedContentTree(aRoot, 0, addedContent);
+
+						EditorGUILayout.EndScrollView();
+					}
+
+					if (addedContent.Count == 0)
+						EditorGUILayout.HelpBox("Drag assets here or select them and use 'Add Selected Asset(s)' with a manual address.", MessageType.Info);
+				}
             }
         }
 
@@ -569,19 +732,23 @@ public class ModSDKWindow : EditorWindow
                     {
                         if (GUILayout.Button("Run Validation", GUILayout.Width(120)))
                         {
-                            lastValidationPassed = ValidateMod(out var issues);
+                            lastValidationPassed = ValidateMod(out var issues, out var info);
                             lastValidationIssues = issues ?? new List<string>();
+                            lastValidationInfo = info ?? new List<string>();
                             Repaint();
                         }
                         if (GUILayout.Button("Clear", GUILayout.Width(72)))
                         {
                             lastValidationIssues = new List<string>();
+                            lastValidationInfo = new List<string>();
                             lastValidationPassed = false;
                             Repaint();
                         }
                         GUILayout.FlexibleSpace();
                     }
                     scrollValidate = EditorGUILayout.BeginScrollView(scrollValidate, GUILayout.MinHeight(120), GUILayout.MaxHeight(240));
+                    
+                    // Show issues (errors/warnings) in red
                     if (lastValidationIssues != null && lastValidationIssues.Count > 0)
                     {
                         var redStyle = new GUIStyle(EditorStyles.miniBoldLabel);
@@ -594,13 +761,38 @@ public class ModSDKWindow : EditorWindow
                             EditorGUILayout.LabelField("• " + line, redWordWrapStyle);
                         }
                     }
-                    else
+                    
+                    // Show info (new content) in cyan - not errors
+                    if (lastValidationInfo != null && lastValidationInfo.Count > 0)
                     {
-                        var status = lastValidationPassed ? "Validation passed." : "Press Run Validation to analyze the current mod.";
+                        EditorGUILayout.Space(4);
+                        var cyanStyle = new GUIStyle(EditorStyles.miniBoldLabel);
+                        cyanStyle.normal.textColor = new Color(0.4f, 0.8f, 1f);
+                        EditorGUILayout.LabelField($"New Content: {lastValidationInfo.Count}", cyanStyle);
+                        foreach (var line in lastValidationInfo)
+                        {
+                            var cyanWordWrapStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel);
+                            cyanWordWrapStyle.normal.textColor = new Color(0.5f, 0.85f, 1f);
+                            EditorGUILayout.LabelField("✓ " + line, cyanWordWrapStyle);
+                        }
+                    }
+                    
+                    // Show success message if no issues
+                    if ((lastValidationIssues == null || lastValidationIssues.Count == 0) && 
+                        (lastValidationInfo == null || lastValidationInfo.Count == 0))
+                    {
+                        var status = lastValidationPassed ? "Validation passed. No issues found." : "Press Run Validation to analyze the current mod.";
                         EditorGUILayout.LabelField(status, EditorStyles.miniLabel);
                     }
+                    else if (lastValidationIssues == null || lastValidationIssues.Count == 0)
+                    {
+                        var greenStyle = new GUIStyle(EditorStyles.miniBoldLabel);
+                        greenStyle.normal.textColor = new Color(0.4f, 1f, 0.4f);
+                        EditorGUILayout.LabelField("No issues - ready to build!", greenStyle);
+                    }
+                    
                     EditorGUILayout.EndScrollView();
-                    EditorGUILayout.HelpBox("Checks: duplicates, spaces in addresses, type mismatches vs. public list, non-public overrides.", MessageType.None);
+                    EditorGUILayout.HelpBox("Checks: duplicates, spaces, type mismatches. New content (Mod/...) shown as info, not errors.", MessageType.None);
                     }
                 }
 
@@ -632,8 +824,10 @@ public class ModSDKWindow : EditorWindow
                         EditorGUILayout.Space(4);
                         using (new EditorGUILayout.HorizontalScope())
                         {
-                            EditorGUILayout.LabelField(new GUIContent("Mod Output Folder", "Absolute path where the per-mod catalog and bundles will be built"), GUILayout.Width(140));
-                            EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set)" : modOutputDir, GUILayout.Height(16));
+                            EditorGUILayout.LabelField(new GUIContent("Mod Output Folder *", "Required. Folder where the mod's catalog and bundles will be built (e.g. a Builds folder outside the project)"), GUILayout.Width(140));
+                            var outputStyle = new GUIStyle(EditorStyles.label);
+                            if (string.IsNullOrEmpty(modOutputDir)) outputStyle.normal.textColor = new Color(1f, 0.6f, 0.2f);
+                            EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(modOutputDir) ? "(not set - required)" : modOutputDir, outputStyle, GUILayout.Height(16));
                             if (GUILayout.Button("Choose…", GUILayout.Width(80)))
                             {
                                 var start = Directory.Exists(modOutputDir) ? modOutputDir : Application.dataPath;
@@ -668,9 +862,26 @@ public class ModSDKWindow : EditorWindow
                             }
                         }
                         // Code packaging uses 'code/' under the selected mod automatically; no extra UI needed
-                        if (GUILayout.Button("Build Mod"))
-                            BuildMod();
-                        EditorGUILayout.HelpBox("If Mod Output Folder is set, the SDK builds a separate catalog + bundles into that folder (per‑mod). If not set, it falls back to copying bundles under StreamingAssets/aa/<Platform>/mods/<ModName>/ and uses the platform catalog.", MessageType.Info);
+                        EditorGUILayout.HelpBox(
+                            $"Your mod scripts go in: Assets/My_Mods/{San(modName)}/Code/\n" +
+                            "Do NOT modify files in Assets/_Internal/ - they are SDK internals and won't affect your mod.",
+                            MessageType.Info);
+                        
+                        // Require output directory to be set before building
+                        bool canBuild = !string.IsNullOrEmpty(modOutputDir) && Directory.Exists(Path.GetDirectoryName(modOutputDir) ?? modOutputDir);
+                        using (new EditorGUI.DisabledScope(!canBuild))
+                        {
+                            if (GUILayout.Button("Build Mod"))
+                                BuildMod();
+                        }
+                        if (!canBuild)
+                        {
+                            EditorGUILayout.HelpBox("Set the Mod Output Folder above before building. This is where your mod's catalog and bundles will be created.", MessageType.Warning);
+                        }
+                        else
+                        {
+                            EditorGUILayout.HelpBox($"Build will output to: {modOutputDir}/{San(modName)}/", MessageType.Info);
+                        }
                     }
                 }
             }
@@ -1016,6 +1227,77 @@ public class ModSDKWindow : EditorWindow
         }
     }
 
+    private void DrawAddedContentTree(TreeNode node, int indent, Dictionary<string, string> addedContent)
+    {
+        if (node == null) return;
+        foreach (var child in node.children)
+        {
+            if (child.isLeaf)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(12 * (indent + 1));
+                    bool isSel = string.Equals(selectedAddress, child.fullPath, StringComparison.Ordinal);
+                    var style = new GUIStyle(isSel ? EditorStyles.boldLabel : EditorStyles.label);
+                    style.normal.textColor = TintNewContent;
+                    style.hover.textColor = TintNewContent;
+					var clicked = GUILayout.Button(child.name, style, GUILayout.ExpandWidth(false));
+					var rect = GUILayoutUtility.GetLastRect();
+					EditorGUIUtility.AddCursorRect(rect, MouseCursor.Link);
+					if (clicked)
+						selectedAddress = child.fullPath;
+
+                    GUILayout.FlexibleSpace();
+
+                    if (addedContent != null && addedContent.TryGetValue(child.fullPath, out var assetPath) && !string.IsNullOrEmpty(assetPath))
+                    {
+                        var rawText = "→ " + CompactAssetPath(assetPath);
+                        var linkStyle = new GUIStyle(EditorStyles.miniLabel);
+                        linkStyle.richText = true;
+                        var content = new GUIContent($"<color=#9ccbff>{rawText}</color>", assetPath);
+						var linkRect = GUILayoutUtility.GetRect(content, linkStyle, GUILayout.ExpandWidth(false));
+						linkRect.y += 3f;
+						EditorGUIUtility.AddCursorRect(linkRect, MouseCursor.Link);
+						GUI.Label(linkRect, content, linkStyle);
+						if (Event.current.type == EventType.MouseDown && linkRect.Contains(Event.current.mousePosition))
+                        {
+                            var obj = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
+                            if (obj != null)
+                            {
+                                EditorGUIUtility.PingObject(obj);
+                                Selection.activeObject = obj;
+                            }
+                            Event.current.Use();
+                        }
+                        if (GUILayout.Button("Remove", GUILayout.Width(68)))
+                        {
+                            RemoveAddedContentEntry(child.fullPath, assetPath);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Space(12 * indent);
+                    var expanded = addContentExpanded.Contains(child.fullPath);
+                    var folderStyle = new GUIStyle(EditorStyles.foldout);
+                    folderStyle.normal.textColor = TintNewContent;
+                    folderStyle.onNormal.textColor = TintNewContent;
+                    var newExpanded = EditorGUILayout.Foldout(expanded, child.name, true, folderStyle);
+                    if (newExpanded != expanded)
+                    {
+                        if (newExpanded) addContentExpanded.Add(child.fullPath);
+                        else addContentExpanded.Remove(child.fullPath);
+                    }
+                }
+                if (addContentExpanded.Contains(child.fullPath))
+                    DrawAddedContentTree(child, indent + 1, addedContent);
+            }
+        }
+    }
+
 	private static string CompactString(string text, int maxLength)
 	{
 		if (string.IsNullOrEmpty(text)) return "";
@@ -1062,6 +1344,42 @@ public class ModSDKWindow : EditorWindow
 		}
 		return cachedOverrideMap;
 	}
+
+    // Returns map of addresses that are NEW content (not in public catalog) -> asset paths
+    private Dictionary<string, string> GetAddedContentMap()
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            var settings = GetOrCreatePerModSettings();
+            if (settings == null) return map;
+            var group = settings.groups.FirstOrDefault(g => g != null && g.name == targetGroupName);
+            if (group == null) return map;
+            string modLabel = $"mod:{San(modName)}";
+            
+            // Build a set of public addresses for quick lookup
+            var publicAddresses = new HashSet<string>(
+                publicCatalog.entries.Select(e => e.address ?? ""),
+                StringComparer.Ordinal
+            );
+
+            foreach (var e in group.entries)
+            {
+                if (e == null) continue;
+                if (!(e.labels != null && e.labels.Contains(modLabel))) continue;
+                var addr = e.address ?? "";
+                // Only include entries NOT in the public catalog (these are "added content")
+                if (!publicAddresses.Contains(addr))
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(e.guid);
+                    if (string.IsNullOrEmpty(path)) continue;
+                    map[addr] = path.Replace('\\','/');
+                }
+            }
+        }
+        catch { }
+        return map;
+    }
 
 	private void EnsureFilteredTreeUpToDate()
 	{
@@ -1258,6 +1576,263 @@ public class ModSDKWindow : EditorWindow
 		AssetDatabase.SaveAssets();
 		Debug.Log($"[ModSDK] (Drag&Drop) Assigned: {ok}, created: {created}, moved: {moved}, type mismatches (warn): {mismatched}");
 	}
+
+    // ---------- Add Custom Content ----------
+    // Adds selected assets with a custom address (for new content not in public catalog)
+    private void AddCustomContentToMod(string customAddress)
+    {
+        if (string.IsNullOrWhiteSpace(customAddress))
+        {
+            Debug.LogWarning("[ModSDK] Custom address cannot be empty.");
+            return;
+        }
+
+        var settings = GetOrCreatePerModSettings();
+        var group = EnsureGroup(settings, targetGroupName);
+
+        var selected = GetSelectedGuids(true);
+        if (selected.Count == 0)
+        {
+            Debug.LogWarning("[ModSDK] Select one or more assets in the Project view.");
+            return;
+        }
+
+        Undo.RecordObject(settings, "Add Custom Content");
+        int ok = 0, created = 0;
+        string modLabel = $"mod:{San(modName)}";
+
+        // For multiple selections, append index or asset name to avoid duplicates
+        bool multipleAssets = selected.Count > 1;
+        int index = 0;
+
+        foreach (var guid in selected)
+        {
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path) || path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) continue;
+            if (path.Contains("/EditorOnly/")) continue;
+
+            var entry = settings.FindAssetEntry(guid);
+            if (entry == null)
+            {
+                entry = settings.CreateOrMoveEntry(guid, group);
+                created++;
+            }
+
+            // Compute the address: for multiple assets, append the asset name
+            string finalAddress = customAddress;
+            if (multipleAssets)
+            {
+                var assetName = Path.GetFileNameWithoutExtension(path);
+                // If address ends with /, treat it as a folder prefix
+                if (customAddress.EndsWith("/"))
+                    finalAddress = customAddress + assetName;
+                else
+                    finalAddress = customAddress + "/" + assetName;
+            }
+
+            entry.SetAddress(finalAddress.Trim());
+
+            // Move to mod group if not already there
+            if (entry.parentGroup != group)
+            {
+                settings.CreateOrMoveEntry(entry.guid, group);
+            }
+
+            // Tag entry for this mod
+            try
+            {
+                var labels = settings.GetLabels();
+                bool has = false;
+                foreach (var l in labels) { if (l == modLabel) { has = true; break; } }
+                if (!has) settings.AddLabel(modLabel);
+                var elabels = new HashSet<string>(entry.labels ?? Enumerable.Empty<string>());
+                if (!elabels.Contains(modLabel)) entry.SetLabel(modLabel, true);
+                // Also add a special label to mark as "added content" for easier identification
+                var addedLabel = "added";
+                has = false;
+                foreach (var l in labels) { if (l == addedLabel) { has = true; break; } }
+                if (!has) settings.AddLabel(addedLabel);
+                if (!elabels.Contains(addedLabel)) entry.SetLabel(addedLabel, true);
+            }
+            catch { }
+
+            ok++;
+            index++;
+        }
+
+        settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryModified, null, true, true);
+        AssetDatabase.SaveAssets();
+
+        // Invalidate caches so UI updates
+        cachedOverrideMap = null;
+        lastOverrideRefresh = -1;
+
+        Debug.Log($"[ModSDK] Added custom content: {ok} entries created at addresses starting with '{customAddress}'");
+    }
+
+    // Add content with auto-generated addresses based on asset paths (drag-drop support)
+    private void AddContentWithAutoAddresses(List<string> guids)
+    {
+        if (guids == null || guids.Count == 0) return;
+
+        var settings = GetOrCreatePerModSettings();
+        var group = EnsureGroup(settings, targetGroupName);
+
+        Undo.RecordObject(settings, "Add Content (Auto Address)");
+        int ok = 0, created = 0;
+        string modLabel = $"mod:{San(modName)}";
+        string modPrefix = $"Mod/{San(modName)}/";
+
+        // Find the mod's working folder to compute relative paths
+        var modWorkingFolder = Path.Combine(GetWorkingRootAssetPath(), San(modName)).Replace('\\', '/');
+
+        foreach (var guid in guids)
+        {
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path) || path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) continue;
+            if (path.Contains("/EditorOnly/")) continue;
+            // Skip folders
+            if (Directory.Exists(path)) continue;
+
+            var entry = settings.FindAssetEntry(guid);
+            if (entry == null)
+            {
+                entry = settings.CreateOrMoveEntry(guid, group);
+                created++;
+            }
+
+            // Generate address from asset path
+            string address = GenerateAddressFromPath(path, modWorkingFolder, modPrefix);
+
+            entry.SetAddress(address);
+
+            // Move to mod group if not already there
+            if (entry.parentGroup != group)
+            {
+                settings.CreateOrMoveEntry(entry.guid, group);
+            }
+
+            // Tag entry for this mod
+            try
+            {
+                var labels = settings.GetLabels();
+                bool has = false;
+                foreach (var l in labels) { if (l == modLabel) { has = true; break; } }
+                if (!has) settings.AddLabel(modLabel);
+                var elabels = new HashSet<string>(entry.labels ?? Enumerable.Empty<string>());
+                if (!elabels.Contains(modLabel)) entry.SetLabel(modLabel, true);
+                // Also add a special label to mark as "added content"
+                var addedLabel = "added";
+                has = false;
+                foreach (var l in labels) { if (l == addedLabel) { has = true; break; } }
+                if (!has) settings.AddLabel(addedLabel);
+                if (!elabels.Contains(addedLabel)) entry.SetLabel(addedLabel, true);
+            }
+            catch { }
+
+            ok++;
+        }
+
+        settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryModified, null, true, true);
+        AssetDatabase.SaveAssets();
+
+        // Invalidate caches so UI updates
+        cachedOverrideMap = null;
+        lastOverrideRefresh = -1;
+
+        Debug.Log($"[ModSDK] Added {ok} content entries with auto-generated addresses (created: {created})");
+    }
+
+    // Generate an address from an asset path
+    // If asset is inside the mod folder, use relative path; otherwise use parent folder + name
+    private string GenerateAddressFromPath(string assetPath, string modWorkingFolder, string modPrefix)
+    {
+        assetPath = assetPath.Replace('\\', '/');
+        var assetName = Path.GetFileNameWithoutExtension(assetPath);
+
+        // Check if asset is inside the mod's working folder
+        if (assetPath.StartsWith(modWorkingFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            // Get relative path from mod folder
+            var relativePath = assetPath.Substring(modWorkingFolder.Length).TrimStart('/');
+            // Remove file extension and use as address
+            var relativeDir = Path.GetDirectoryName(relativePath)?.Replace('\\', '/') ?? "";
+            
+            // Skip special folders like Code, AssetGroups, DataBuilders, etc.
+            if (relativeDir.StartsWith("Code", StringComparison.OrdinalIgnoreCase) ||
+                relativeDir.StartsWith("AssetGroups", StringComparison.OrdinalIgnoreCase) ||
+                relativeDir.StartsWith("DataBuilders", StringComparison.OrdinalIgnoreCase) ||
+                relativeDir.StartsWith("AssetGroupTemplates", StringComparison.OrdinalIgnoreCase) ||
+                relativeDir.StartsWith("BuildTemp", StringComparison.OrdinalIgnoreCase))
+            {
+                // Use just the asset name with a generic prefix
+                return modPrefix + "Assets/" + assetName;
+            }
+
+            if (string.IsNullOrEmpty(relativeDir))
+                return modPrefix + assetName;
+            else
+                return modPrefix + relativeDir + "/" + assetName;
+        }
+
+        // Asset is outside mod folder - use parent folder + asset name
+        var parentDir = Path.GetFileName(Path.GetDirectoryName(assetPath));
+        if (string.IsNullOrEmpty(parentDir))
+            return modPrefix + assetName;
+        else
+            return modPrefix + parentDir + "/" + assetName;
+    }
+
+    // Remove an added content entry
+    private void RemoveAddedContentEntry(string address, string assetPath)
+    {
+        try
+        {
+            var settings = GetOrCreatePerModSettings();
+            if (settings == null)
+            {
+                Debug.LogWarning($"[ModSDK] Remove added content failed: settings not found.");
+                return;
+            }
+
+            var group = settings.groups.FirstOrDefault(g => g != null && g.name == targetGroupName);
+            if (group == null)
+            {
+                Debug.LogWarning($"[ModSDK] Remove added content failed: group '{targetGroupName}' not found.");
+                return;
+            }
+
+            string modLabel = $"mod:{San(modName)}";
+            var toRemove = group.entries
+                .Where(e => e != null && string.Equals(e.address ?? string.Empty, address, StringComparison.Ordinal)
+                    && e.labels != null && e.labels.Contains(modLabel))
+                .ToList();
+
+            if (toRemove.Count == 0)
+            {
+                Debug.LogWarning($"[ModSDK] No added content entry found for '{address}' in this mod.");
+                return;
+            }
+
+            Undo.RecordObject(settings, "Remove Added Content");
+            foreach (var e in toRemove)
+            {
+                try { settings.RemoveAssetEntry(e.guid); } catch { }
+            }
+            settings.SetDirty(AddressableAssetSettings.ModificationEvent.EntryRemoved, null, true, true);
+            AssetDatabase.SaveAssets();
+
+            // Invalidate caches
+            cachedOverrideMap = null;
+            lastOverrideRefresh = -1;
+            Repaint();
+            Debug.Log($"[ModSDK] Removed added content entry '{address}' from mod '{San(modName)}'.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[ModSDK] Failed to remove added content '{address}': {ex.Message}");
+        }
+    }
 
 	// ---------- Preview from metadata ----------
 	private void BuildPreviewFromMeta(PublicEntry entry)
@@ -1670,9 +2245,10 @@ public class ModSDKWindow : EditorWindow
     // Auto mode removed per updated UX
 
     // ---------- Validate ----------
-    private bool ValidateMod(out List<string> issues)
+    private bool ValidateMod(out List<string> issues, out List<string> info)
     {
         issues = new List<string>();
+        info = new List<string>();
         var settings = GetOrCreatePerModSettings();
         if (settings == null) { issues.Add("Per‑mod Addressables settings not found."); return false; }
 
@@ -1699,11 +2275,28 @@ public class ModSDKWindow : EditorWindow
             if (!taken.Add(addr))
                 issues.Add($"Duplicate address in mod group: '{addr}'");
 
-            // warn if overriding a non-public address (optional)
+            // Check if address is in public list
             if (expected.Count > 0 && !expected.ContainsKey(addr))
-                issues.Add($"Address '{addr}' not found in public list (ok for NEW content, but won't override the base game).");
+            {
+                // Check if this looks like intentional new content (starts with Mod/ or has "added" label)
+                bool isIntentionalNewContent = addr.StartsWith("Mod/", StringComparison.OrdinalIgnoreCase) ||
+                                                (e.labels != null && e.labels.Contains("added"));
+                
+                if (isIntentionalNewContent)
+                {
+                    // This is intentional new content - show as info, not a warning
+                    var path = AssetDatabase.GUIDToAssetPath(e.guid);
+                    var assetType = AssetDatabase.GetMainAssetTypeAtPath(path)?.Name ?? "Asset";
+                    info.Add($"'{addr}' ({assetType}) - new content added by mod");
+                }
+                else
+                {
+                    // This might be a typo or mistake - show as warning
+                    issues.Add($"Address '{addr}' not in public list. If this is new content, use 'Mod/{San(modName)}/...' prefix.");
+                }
+            }
 
-            // type check
+            // type check for overrides
             var tExpected = expected.ContainsKey(addr) ? expected[addr] : "";
             if (!string.IsNullOrEmpty(tExpected))
             {
@@ -1715,6 +2308,12 @@ public class ModSDKWindow : EditorWindow
         }
 
         return issues.Count == 0;
+    }
+    
+    // Overload for build validation (doesn't need info output)
+    private bool ValidateMod(out List<string> issues)
+    {
+        return ValidateMod(out issues, out _);
     }
 
     // ---------- Build ----------
@@ -1741,20 +2340,18 @@ public class ModSDKWindow : EditorWindow
         settings.SetDirty(AddressableAssetSettings.ModificationEvent.GroupSchemaModified, group, true, false);
         AssetDatabase.SaveAssets();
 
-        // Always produce a per‑mod catalog (either to the provided output dir, or into StreamingAssets mods path)
-        if (!string.IsNullOrEmpty(modOutputDir))
+        // Require output directory to be set
+        if (string.IsNullOrEmpty(modOutputDir))
         {
-            var perModOutDir = Path.Combine(modOutputDir, San(modName));
-            BuildPerModCatalog(perModOutDir, group);
+            EditorUtility.DisplayDialog("Output Folder Required",
+                "Please set the Mod Output Folder before building.\n\n" +
+                "This is where your mod's catalog and asset bundles will be created.",
+                "OK");
             return;
         }
 
-        var platform = PlatformMappingService.GetPlatformPathSubFolder();
-        var streamingAA = Path.Combine(Application.streamingAssetsPath, "aa", platform);
-        Directory.CreateDirectory(streamingAA);
-        var outRoot = Path.Combine(streamingAA, "mods", San(modName));
-        BuildPerModCatalog(outRoot, group);
-        return;
+        var perModOutDir = Path.Combine(modOutputDir, San(modName));
+        BuildPerModCatalog(perModOutDir, group);
     }
 
     private void BuildPerModCatalog(string outDir, AddressableAssetGroup sourceGroup)
@@ -1998,6 +2595,9 @@ public class ModSDKWindow : EditorWindow
                 catch { }
             }
 
+            // Generate mod.content.json listing all added content (non-override entries)
+            WriteModContentManifest(outDir, sourceGroup);
+
             // Optional: include code payload and manifest (compile C# under code/ or copy prebuilt DLLs)
             WriteOrBuildCodePayload(outDir);
 
@@ -2146,6 +2746,64 @@ public class ModSDKWindow : EditorWindow
         }
     }
 
+    // ---------- Content manifest for added content ----------
+    private void WriteModContentManifest(string outDir, AddressableAssetGroup sourceGroup)
+    {
+        try
+        {
+            // Build a set of public addresses for quick lookup
+            var publicAddresses = new HashSet<string>(
+                publicCatalog.entries.Select(e => e.address ?? ""),
+                StringComparer.Ordinal
+            );
+
+            string modLabel = $"mod:{San(modName)}";
+            var addedContent = new List<(string address, string type, string assetPath)>();
+
+            foreach (var e in sourceGroup.entries)
+            {
+                if (e == null) continue;
+                if (!(e.labels != null && e.labels.Contains(modLabel))) continue;
+                var addr = e.address ?? "";
+                // Only include entries NOT in the public catalog (these are "added content")
+                if (!publicAddresses.Contains(addr))
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(e.guid);
+                    if (string.IsNullOrEmpty(path)) continue;
+                    var assetType = AssetDatabase.GetMainAssetTypeAtPath(path)?.Name ?? "Unknown";
+                    addedContent.Add((addr, assetType, path));
+                }
+            }
+
+            if (addedContent.Count == 0)
+            {
+                Debug.Log("[ModSDK] No added content to write to manifest.");
+                return;
+            }
+
+            // Build JSON manually to avoid dependency on JsonUtility for complex structures
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("{");
+            sb.AppendLine("  \"addedContent\": [");
+            for (int i = 0; i < addedContent.Count; i++)
+            {
+                var (addr, type, assetPath) = addedContent[i];
+                var comma = i < addedContent.Count - 1 ? "," : "";
+                sb.AppendLine($"    {{ \"address\": \"{Escape(addr)}\", \"type\": \"{Escape(type)}\", \"assetPath\": \"{Escape(assetPath)}\" }}{comma}");
+            }
+            sb.AppendLine("  ]");
+            sb.AppendLine("}");
+
+            var contentPath = Path.Combine(outDir, "mod.content.json");
+            File.WriteAllText(contentPath, sb.ToString());
+            Debug.Log($"[ModSDK] Wrote content manifest with {addedContent.Count} added content entries: {contentPath}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[ModSDK] Content manifest write failed: {ex.Message}");
+        }
+    }
+
     // ---------- Optional code packaging (Harmony) ----------
 	private async void WriteOrBuildCodePayload(string outDir)
     {
@@ -2235,33 +2893,24 @@ public class ModSDKWindow : EditorWindow
                 return tcs.Task;
             }
             var asmName = Path.GetFileNameWithoutExtension(outputPath);
-            // Ensure SDK helper is compiled into the mod DLL so STN.ModSDK.HarmonyTargets resolves
             var sourceList = (csFiles ?? Array.Empty<string>()).ToList();
-            try
-            {
-                var helperRel = "Assets/_Internal/Utility/ModManager/HarmonyTargets.cs";
-                var helperAbs = GetAbsoluteFilePath(helperRel);
-                if (!string.IsNullOrEmpty(helperAbs) && File.Exists(helperAbs))
-                {
-                    bool alreadyIncluded = sourceList.Any(p => p.EndsWith("HarmonyTargets.cs", StringComparison.OrdinalIgnoreCase));
-                    if (!alreadyIncluded) sourceList.Add(helperAbs);
-                }
-            }
-            catch { }
             var builder = new AssemblyBuilder(outputPath, sourceList.ToArray());
             // Target runtime compatible with project's API compatibility level
             builder.compilerOptions = new ScriptCompilerOptions
             {
                 ApiCompatibilityLevel = PlayerSettings.GetApiCompatibilityLevel(EditorUserBuildSettings.selectedBuildTargetGroup)
             };
-            // Add default references: UnityEngine, UnityEditor (if needed), and 0Harmony if present in project
+            // Add default references: UnityEngine facade + all engine modules (CoreModule, AudioModule, etc.)
             var refs = new List<string>();
             TryAddRef(references: refs, asmName: "UnityEngine.dll");
+            TryAddUnityEngineModules(refs);
 #if UNITY_EDITOR
             TryAddRef(references: refs, asmName: "UnityEditor.dll");
 #endif
             // Try find 0Harmony.dll in project (Assets/**)
             TryAddHarmonyRef(refs);
+            // Add STN.ModSDK.dll so mods can use HarmonyTargets and ModContentLoader
+            TryAddModSDKRef(refs);
             builder.additionalReferences = refs.ToArray();
             Debug.Log($"[ModSDK] Using {builder.additionalReferences.Length} compiler reference(s): {string.Join(", ", builder.additionalReferences)}");
 
@@ -2319,14 +2968,97 @@ public class ModSDKWindow : EditorWindow
         catch { }
     }
 
+    private static void TryAddModSDKRef(List<string> references)
+    {
+        // STN.ModSDK.dll is compiled by Unity into Library/ScriptAssemblies from the .asmdef
+        string foundPath = null;
+        
+        // 1) Primary: Library/ScriptAssemblies (Unity's compiled output)
+        try
+        {
+            var projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            var sdkDll = Path.Combine(projectRoot, "Library", "ScriptAssemblies", "STN.ModSDK.dll");
+            if (File.Exists(sdkDll))
+            {
+                foundPath = sdkDll;
+            }
+        }
+        catch { }
+        
+        // 2) Fallback: Assets/_Internal/Plugins (manual placement)
+        if (string.IsNullOrEmpty(foundPath))
+        {
+            try
+            {
+                var pluginPath = GetAbsoluteFilePath("Assets/_Internal/Plugins/STN.ModSDK.dll");
+                if (!string.IsNullOrEmpty(pluginPath) && File.Exists(pluginPath))
+                {
+                    foundPath = pluginPath;
+                }
+            }
+            catch { }
+        }
+        
+        // 3) Fallback: scan Assets for any STN.ModSDK.dll
+        if (string.IsNullOrEmpty(foundPath))
+        {
+            try
+            {
+                var any = Directory.GetFiles(Application.dataPath, "STN.ModSDK.dll", SearchOption.AllDirectories).FirstOrDefault();
+                if (!string.IsNullOrEmpty(any) && File.Exists(any))
+                {
+                    foundPath = any;
+                }
+            }
+            catch { }
+        }
+        
+        if (!string.IsNullOrEmpty(foundPath))
+        {
+            references.Add(foundPath);
+            return;
+        }
+        
+        // Not found - provide actionable guidance
+        Debug.LogWarning("[ModSDK] STN.ModSDK.dll not found. " +
+            "If this is a fresh project, let Unity finish compiling (check for spinner in bottom-right). " +
+            "Mods using HarmonyTargets or ModContentLoader will fail to compile without this reference.");
+    }
+
     private static void TryAddRef(List<string> references, string asmName)
     {
         try
         {
             var unityDir = EditorApplication.applicationContentsPath;
+            // 1) Check the Mono class library (system assemblies, UnityEngine.dll facade)
             var monoLib = Path.Combine(unityDir, "MonoBleedingEdge/lib/mono/4.7.1");
             var file = Path.Combine(monoLib, asmName);
             if (File.Exists(file)) { references.Add(file); return; }
+            // 2) Check the Managed/UnityEngine folder (module DLLs like UnityEngine.CoreModule, etc.)
+            var managedModules = Path.Combine(unityDir, "Managed", "UnityEngine");
+            file = Path.Combine(managedModules, asmName);
+            if (File.Exists(file)) { references.Add(file); return; }
+            // 3) Check the top-level Managed folder (UnityEditor.dll lives here)
+            var managed = Path.Combine(unityDir, "Managed");
+            file = Path.Combine(managed, asmName);
+            if (File.Exists(file)) { references.Add(file); return; }
+        }
+        catch { }
+    }
+
+    /// <summary>Add all UnityEngine module DLLs so mod code can use Vector3, Input, AudioSource, etc.</summary>
+    private static void TryAddUnityEngineModules(List<string> references)
+    {
+        try
+        {
+            var modulesDir = Path.Combine(EditorApplication.applicationContentsPath, "Managed", "UnityEngine");
+            if (!Directory.Exists(modulesDir)) return;
+            var existing = new HashSet<string>(references.Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
+            foreach (var dll in Directory.GetFiles(modulesDir, "UnityEngine*.dll"))
+            {
+                var name = Path.GetFileName(dll);
+                if (!existing.Contains(name)) { references.Add(dll); existing.Add(name); }
+            }
         }
         catch { }
     }

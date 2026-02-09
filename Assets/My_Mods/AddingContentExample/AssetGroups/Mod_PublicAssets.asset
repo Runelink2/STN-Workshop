@@ -15,21 +15,23 @@ MonoBehaviour:
   m_GroupName: Mod_PublicAssets
   m_Data:
     m_SerializedData: []
-  m_GUID: d1efbb3c47e235a4da6afffd970ce15d
+  m_GUID: 33796a60669afa9439f58222bde5c3fe
   m_SerializeEntries:
-  - m_GUID: 6cd06e517b5cf2c4dbd112e3f903a272
-    m_Address: Weapons/m-357/Textures/Tex_txt_357magnum_df
+  - m_GUID: bd0a8cf2378d50b42ad83c9d7401c18b
+    m_Address: Mod/AddingContentExample/Assets/ExampleSphere
     m_ReadOnly: 0
     m_SerializedLabels:
-    - mod:MyMod
+    - mod:AddingContentExample
+    - added
   - m_GUID: a2a7facb3eb421c47a6a044e9bacb449
-    m_Address: Weapons/m-357/Sounds/SFX_M-357@Fire
+    m_Address: Mod/AddingContentExample/Assets/EWWUPPP
     m_ReadOnly: 0
     m_SerializedLabels:
-    - mod:MyMod
+    - mod:AddingContentExample
+    - added
   m_ReadOnly: 0
-  m_Settings: {fileID: 11400000, guid: 6fa1c6bf5617a014bb205c54ebb71ec5, type: 2}
+  m_Settings: {fileID: 11400000, guid: 85e4431933d6a34438ba9cd355f38f5c, type: 2}
   m_SchemaSet:
     m_Schemas:
-    - {fileID: 11400000, guid: a9f2c252d94f05944a21f5d82b6c406a, type: 2}
-    - {fileID: 11400000, guid: 6110f16c9bd6dd642a9b502d6b0be075, type: 2}
+    - {fileID: 11400000, guid: ee108695940d84b4390a9774f382da49, type: 2}
+    - {fileID: 11400000, guid: 11fe5c60b8bbc3042909c0e08b8375ec, type: 2}

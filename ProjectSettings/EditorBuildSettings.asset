@@ -9,4 +9,4 @@ EditorBuildSettings:
     path: Assets/Arcades/_Scenes/Arcades.unity
     guid: 0337ce024ddc1c144849cd82cda519e9
   m_configObjects:
-    com.unity.addressableassets: {fileID: 11400000, guid: 7ba9956bb6dad254ab3dfd3d33181f36, type: 2}
+    com.unity.addressableassets: {fileID: 11400000, guid: 6d0a4be1e2c58b14d9181d1cff4b7879, type: 2}
