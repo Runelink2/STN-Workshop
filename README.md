@@ -1,4 +1,9 @@
-# STN Workshop
+
+# STN SDK 
+
+See the releases page for direct download.
+
+# STN Workshop (git clone)
 
 Survive The Nights --- Modding & Workshop SDK
 
