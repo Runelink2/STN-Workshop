@@ -23,10 +23,7 @@ git lfs pull
 
 ### Option 2 --- GitHub ZIP
 
-Download ZIP then replace: Assets/\_Internal/Json/public_metadata.json
-
-Download real file:
-https://drive.google.com/file/d/1PghrVLUBcsxOXO3cnwES-IpiP_zuCZnb/view
+Download ZIP (releases page). Also download public_metadata.json from the releases page as it'll be needed for asset swapping
 
 ---
 
