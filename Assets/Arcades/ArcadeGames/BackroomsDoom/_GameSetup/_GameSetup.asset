@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   machineFolderPath: Assets\Arcades\ArcadeGames\BackroomsDoom\_GameSetup
   gameName: Backrooms Doom
-  arcadeMachineColor: {r: 0.10298407, g: 1, b: 0, a: 1}
+  arcadeMachineColor: {r: 0.4433962, g: 0.39354897, b: 0.14431292, a: 1}
   arcadeGamePrefabName: ArcadeGame
   arcadeTextureName: txt_Arcade
   arcadeEmissionName: txt_Arcade_em
