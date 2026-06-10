@@ -13,7 +13,7 @@ MonoBehaviour:
   m_Name: _GameSetup
   m_EditorClassIdentifier: 
   machineFolderPath: Assets\Arcades\ArcadeGames\RetroInvaders\_GameSetup
-  gameName: RetroVaders
+  gameName: Space Zombies
   arcadeMachineColor: {r: 0.764151, g: 0.0070499848, b: 0, a: 1}
   arcadeGamePrefabName: ArcadeGame
   arcadeTextureName: txt_Arcade

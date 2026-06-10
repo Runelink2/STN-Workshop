@@ -17,6 +17,10 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
     [SerializeField] private bool showHud = true;
     [SerializeField] private Color groundColor = new Color(0.16f, 0.19f, 0.15f, 1.0f);
     [SerializeField] private Color groundCheckerColor = new Color(0.14f, 0.17f, 0.13f, 1.0f);
+    [SerializeField] private Texture2D backgroundTexture;
+    [SerializeField] private Texture2D readyLogoTexture;
+    [SerializeField] private float readyLogoWidth = 10.0f;
+    [SerializeField] private float arcadeMouseAimSensitivity = 0.08f;
     [SerializeField] private float visualIntensity = 1.0f;
     [SerializeField] private float vignetteStrength = 0.62f;
     [SerializeField] private float cameraShakeDuration = 0.12f;
@@ -101,6 +105,7 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
     private const float SplatFadeDuration = 6.0f;
     private const float PickupLifetime = 8.0f;
     private const float PlayerDamageFlashDuration = 0.18f;
+    private const float GroundPixelsPerUnit = 24.0f;
     private const float ArcadeHudTitleSize = 0.105f;
     private const float ArcadeHudBodySize = 0.052f;
     private const float ArcadeHudScoreSize = 0.062f;
@@ -137,7 +142,8 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
     private Transform gunPivot;
     private SpriteRenderer muzzleFlashRenderer;
     private Vector2 playerPosition;
-    private Vector2 keyboardAimDirection = Vector2.right;
+    private Vector2 arcadeAimWorldPosition;
+    private bool hasArcadeAimWorldPosition;
     private float aimAngle;
     private int playerHealth;
     private float invulnerabilityTimer;
@@ -174,6 +180,7 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
     private HudText arcadeMessageText;
     private HudText arcadeSmallText;
     private HudText arcadePromptText;
+    private SpriteRenderer readyLogoRenderer;
 
     private static readonly Color WalkerColor = new Color(0.42f, 0.65f, 0.3f, 1.0f);
     private static readonly Color RunnerColor = new Color(0.78f, 0.72f, 0.3f, 1.0f);
@@ -192,7 +199,7 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         ResetRun();
         UpdateHud();
 
-        Debug.Log("Survive the Nights ready. WASD/Arrows to move, Space/Enter/E to fire.");
+        Debug.Log("Survive the Nights ready. WASD/Arrows to move, mouse to aim, click/Space to fire.");
     }
 
     private void Update() {
@@ -249,7 +256,7 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         return Input.GetKeyDown(KeyCode.Space)
             || Input.GetKeyDown(KeyCode.Return)
             || Input.GetKeyDown(KeyCode.E)
-            || (!arcadeOutputMode && Input.GetMouseButtonDown(0));
+            || Input.GetMouseButtonDown(0);
     }
 
     private bool RetryPressed() {
@@ -261,7 +268,7 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         return Input.GetKey(KeyCode.Space)
             || Input.GetKey(KeyCode.Return)
             || Input.GetKey(KeyCode.E)
-            || (!arcadeOutputMode && Input.GetMouseButton(0));
+            || Input.GetMouseButton(0);
     }
 
     private void UpdatePlayer(float deltaTime, Vector2 move) {
@@ -288,45 +295,62 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
     }
 
     private void UpdateAim(Vector2 moveInput) {
-        Vector2 aimDirection = Vector2.zero;
-        if (!arcadeOutputMode && mainCamera != null) {
-            Vector3 mouseWorld = mainCamera.ScreenToWorldPoint(Input.mousePosition);
-            aimDirection = new Vector2(mouseWorld.x - playerPosition.x, mouseWorld.y - playerPosition.y);
-        }
-
-        if (arcadeOutputMode || aimDirection.sqrMagnitude <= 0.001f) {
-            aimDirection = GetArcadeAimDirection(moveInput);
-        }
+        Vector2 aimDirection = arcadeOutputMode
+            ? GetArcadeMouseAimDirection(moveInput)
+            : GetStandaloneMouseAimDirection(moveInput);
 
         if (aimDirection.sqrMagnitude > 0.001f) {
-            keyboardAimDirection = aimDirection.normalized;
-            aimAngle = Mathf.Atan2(keyboardAimDirection.y, keyboardAimDirection.x) * Mathf.Rad2Deg;
+            aimAngle = Mathf.Atan2(aimDirection.y, aimDirection.x) * Mathf.Rad2Deg;
         }
 
         gunPivot.localRotation = Quaternion.Euler(0.0f, 0.0f, aimAngle);
     }
 
-    private Vector2 GetArcadeAimDirection(Vector2 moveInput) {
-        float closestDistance = float.MaxValue;
-        Vector2 closestDirection = Vector2.zero;
-        for (int i = 0; i < activeZombies.Count; i++) {
-            Vector2 direction = activeZombies[i].position - playerPosition;
-            float distance = direction.sqrMagnitude;
-            if (distance < closestDistance && distance > 0.001f) {
-                closestDistance = distance;
-                closestDirection = direction;
+    private Vector2 GetStandaloneMouseAimDirection(Vector2 fallbackDirection) {
+        Vector2 aimDirection = Vector2.zero;
+        if (mainCamera != null) {
+            Vector3 mouseWorld = mainCamera.ScreenToWorldPoint(Input.mousePosition);
+            aimDirection = new Vector2(mouseWorld.x - playerPosition.x, mouseWorld.y - playerPosition.y);
+        }
+
+        if (aimDirection.sqrMagnitude <= 0.001f) {
+            aimDirection = fallbackDirection;
+        }
+
+        return aimDirection;
+    }
+
+    private Vector2 GetArcadeMouseAimDirection(Vector2 fallbackDirection) {
+        if (!hasArcadeAimWorldPosition) {
+            float radians = aimAngle * Mathf.Deg2Rad;
+            Vector2 initialDirection = new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+            arcadeAimWorldPosition = playerPosition + initialDirection * Mathf.Min(worldHalfWidth, worldHalfHeight);
+            hasArcadeAimWorldPosition = true;
+        }
+
+        if (Cursor.lockState == CursorLockMode.Locked) {
+            Vector2 mouseDelta = new Vector2(Input.GetAxisRaw("Mouse X"), Input.GetAxisRaw("Mouse Y")) * arcadeMouseAimSensitivity;
+            if (mouseDelta.sqrMagnitude > 0.0f) {
+                arcadeAimWorldPosition += mouseDelta;
             }
+        } else {
+            float screenWidth = Mathf.Max(1.0f, Screen.width);
+            float screenHeight = Mathf.Max(1.0f, Screen.height);
+            float viewportX = Mathf.Clamp01(Input.mousePosition.x / screenWidth);
+            float viewportY = Mathf.Clamp01(Input.mousePosition.y / screenHeight);
+            arcadeAimWorldPosition = new Vector2(
+                Mathf.Lerp(-worldHalfWidth, worldHalfWidth, viewportX),
+                Mathf.Lerp(-worldHalfHeight, worldHalfHeight, viewportY)
+            );
         }
 
-        if (closestDirection.sqrMagnitude > 0.001f) {
-            return closestDirection;
-        }
+        arcadeAimWorldPosition = new Vector2(
+            Mathf.Clamp(arcadeAimWorldPosition.x, -worldHalfWidth, worldHalfWidth),
+            Mathf.Clamp(arcadeAimWorldPosition.y, -worldHalfHeight, worldHalfHeight)
+        );
 
-        if (moveInput.sqrMagnitude > 0.001f) {
-            return moveInput;
-        }
-
-        return keyboardAimDirection;
+        Vector2 aimDirection = arcadeAimWorldPosition - playerPosition;
+        return aimDirection.sqrMagnitude > 0.001f ? aimDirection : fallbackDirection;
     }
 
     private void UpdateShooting(float deltaTime) {
@@ -804,6 +828,8 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         wave = 0;
         playerHealth = playerMaxHealth;
         playerPosition = Vector2.zero;
+        aimAngle = 0.0f;
+        hasArcadeAimWorldPosition = false;
         invulnerabilityTimer = 0.0f;
         fireCooldown = 0.0f;
         rapidFireTimer = 0.0f;
@@ -1474,6 +1500,11 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
     }
 
     private void CreateGround() {
+        if (backgroundTexture != null) {
+            CreateGroundObject(backgroundTexture);
+            return;
+        }
+
         const int width = 320;
         const int height = 192;
         const int tileSize = 16;
@@ -1544,13 +1575,16 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         texture.Apply();
         texture.filterMode = FilterMode.Bilinear;
 
-        const float pixelsPerUnit = 24.0f;
-        Sprite sprite = Sprite.Create(texture, new Rect(0, 0, width, height), new Vector2(0.5f, 0.5f), pixelsPerUnit);
+        CreateGroundObject(texture);
+    }
+
+    private void CreateGroundObject(Texture2D texture) {
+        Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), GroundPixelsPerUnit);
         GameObject ground = CreateLayeredGameObject("Ground");
         ground.transform.SetParent(transform, false);
         ground.transform.localScale = new Vector3(
-            worldHalfWidth * 2.0f / (width / pixelsPerUnit),
-            worldHalfHeight * 2.0f / (height / pixelsPerUnit),
+            worldHalfWidth * 2.0f / Mathf.Max(0.01f, texture.width / GroundPixelsPerUnit),
+            worldHalfHeight * 2.0f / Mathf.Max(0.01f, texture.height / GroundPixelsPerUnit),
             1.0f
         );
         SpriteRenderer renderer = ground.AddComponent<SpriteRenderer>();
@@ -1617,10 +1651,41 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         GameObject hudRoot = CreateLayeredGameObject("Arcade HUD");
         hudRoot.transform.SetParent(transform, false);
         arcadeScoreText = CreateHudText(hudRoot.transform, "Score", new Vector3(0.0f, 4.55f, -0.1f), ArcadeHudScoreSize, FontStyle.Bold);
-        arcadeStatusText = CreateHudText(hudRoot.transform, "Status", new Vector3(0.0f, 4.2f, -0.1f), ArcadeHudBodySize, FontStyle.Bold);
+        arcadeStatusText = CreateHudText(hudRoot.transform, "Status", new Vector3(0.0f, 4.0f, -0.1f), ArcadeHudBodySize, FontStyle.Bold);
         arcadeMessageText = CreateHudText(hudRoot.transform, "Message", new Vector3(0.0f, 1.0f, -0.1f), ArcadeHudTitleSize, FontStyle.Bold);
-        arcadeSmallText = CreateHudText(hudRoot.transform, "Small Message", new Vector3(0.0f, 0.25f, -0.1f), ArcadeHudBodySize, FontStyle.Bold);
-        arcadePromptText = CreateHudText(hudRoot.transform, "Prompt", new Vector3(0.0f, -0.32f, -0.1f), ArcadeHudBodySize, FontStyle.Normal);
+        arcadeSmallText = CreateHudText(hudRoot.transform, "Small Message", new Vector3(0.0f, -3.05f, -0.1f), ArcadeHudBodySize, FontStyle.Bold);
+        arcadePromptText = CreateHudText(hudRoot.transform, "Prompt", new Vector3(0.0f, -3.55f, -0.1f), ArcadeHudBodySize, FontStyle.Normal);
+        CreateReadyLogo(hudRoot.transform);
+    }
+
+    private void CreateReadyLogo(Transform parent) {
+        if (readyLogoTexture == null) {
+            return;
+        }
+
+        Sprite logoSprite = Sprite.Create(readyLogoTexture, new Rect(0, 0, readyLogoTexture.width, readyLogoTexture.height), new Vector2(0.5f, 0.5f), 100.0f);
+        GameObject logoObject = CreateLayeredGameObject("Ready Logo");
+        logoObject.transform.SetParent(parent, false);
+        logoObject.transform.localPosition = new Vector3(0.0f, 1.0f, -0.1f);
+
+        float logoWidth = Mathf.Max(0.1f, readyLogoWidth);
+        float spriteWorldWidth = Mathf.Max(0.01f, logoSprite.bounds.size.x);
+        float logoScale = logoWidth / spriteWorldWidth;
+        logoObject.transform.localScale = new Vector3(logoScale, logoScale, 1.0f);
+
+        readyLogoRenderer = logoObject.AddComponent<SpriteRenderer>();
+        readyLogoRenderer.sprite = logoSprite;
+        readyLogoRenderer.sortingOrder = 100;
+        readyLogoRenderer.enabled = false;
+    }
+
+    private void SetHudTextPosition(HudText hudText, Vector3 localPosition) {
+        if (hudText == null) {
+            return;
+        }
+
+        hudText.foreground.transform.localPosition = localPosition;
+        hudText.shadow.transform.localPosition = localPosition + new Vector3(ArcadeHudShadowOffset, -ArcadeHudShadowOffset, 0.0f);
     }
 
     private HudText CreateHudText(Transform parent, string name, Vector3 localPosition, float characterSize, FontStyle fontStyle) {
@@ -1665,12 +1730,16 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         if (state == GameState.Ready) {
             SetHudText(arcadeScoreText, "");
             SetHudText(arcadeStatusText, "");
-            SetHudText(arcadeMessageText, "SURVIVE THE NIGHTS");
+            SetReadyLogoVisible(readyLogoRenderer != null);
+            SetHudTextPosition(arcadeSmallText, new Vector3(0.0f, -3.05f, -0.1f));
+            SetHudTextPosition(arcadePromptText, new Vector3(0.0f, -3.55f, -0.1f));
+            SetHudText(arcadeMessageText, readyLogoRenderer == null ? "SURVIVE THE NIGHTS" : "");
             SetHudText(arcadeSmallText, "BEST: " + bestScore);
             SetHudText(arcadePromptText, "SPACE / ENTER TO START");
             return;
         }
 
+        SetReadyLogoVisible(false);
         SetHudText(arcadeScoreText, "SCORE " + score + "   WAVE " + wave);
         string status = "HP " + playerHealth + "/" + playerMaxHealth;
         if (rapidFireTimer > 0.0f) {
@@ -1679,6 +1748,8 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
         SetHudText(arcadeStatusText, status);
 
         if (state == GameState.GameOver) {
+            SetHudTextPosition(arcadeSmallText, new Vector3(0.0f, 0.25f, -0.1f));
+            SetHudTextPosition(arcadePromptText, new Vector3(0.0f, -0.32f, -0.1f));
             SetHudText(arcadeMessageText, "YOU DIED");
             SetHudText(arcadeSmallText, "SCORE: " + score + "   BEST: " + bestScore);
             SetHudText(arcadePromptText, "SPACE TO RETRY");
@@ -1690,6 +1761,12 @@ public sealed class ZombieSurvivalGame : MonoBehaviour {
             SetHudText(arcadeMessageText, "");
             SetHudText(arcadeSmallText, "");
             SetHudText(arcadePromptText, "");
+        }
+    }
+
+    private void SetReadyLogoVisible(bool visible) {
+        if (readyLogoRenderer != null) {
+            readyLogoRenderer.enabled = visible;
         }
     }
 

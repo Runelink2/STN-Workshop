@@ -135,6 +135,10 @@ MonoBehaviour:
   showHud: 1
   groundColor: {r: 0.16, g: 0.19, b: 0.15, a: 1}
   groundCheckerColor: {r: 0.14, g: 0.17, b: 0.13, a: 1}
+  backgroundTexture: {fileID: 2800000, guid: 5f5e3c5da41177543a06d6cbe8a85cf7, type: 3}
+  readyLogoTexture: {fileID: 2800000, guid: ff379f2e6db2bfa45ba4969e8b564e64, type: 3}
+  readyLogoWidth: 10
+  arcadeMouseAimSensitivity: 0.08
   visualIntensity: 1
   vignetteStrength: 0.62
   cameraShakeDuration: 0.12
