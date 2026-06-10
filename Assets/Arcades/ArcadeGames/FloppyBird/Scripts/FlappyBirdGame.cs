@@ -39,6 +39,15 @@ public sealed class FlappyBirdGame : MonoBehaviour {
     }
 
     private const string BestScoreKey = "FlappyBird.BestScore";
+    private const float ArcadeHudTitleSize = 0.10725f;
+    private const float ArcadeHudBodySize = 0.0552f;
+    private const float ArcadeHudScoreSize = 0.1035f;
+    private const float ArcadeHudShadowOffset = 0.015f;
+
+    private sealed class HudText {
+        public TextMesh foreground;
+        public TextMesh shadow;
+    }
 
     private GameState state = GameState.Ready;
     private System.Random rng;
@@ -67,9 +76,10 @@ public sealed class FlappyBirdGame : MonoBehaviour {
     private readonly GUIContent guiContent = new GUIContent();
     private bool arcadeOutputMode;
     private int renderLayer;
-    private TextMesh arcadeScoreText;
-    private TextMesh arcadeMessageText;
-    private TextMesh arcadeSmallText;
+    private HudText arcadeScoreText;
+    private HudText arcadeMessageText;
+    private HudText arcadeSmallText;
+    private HudText arcadePromptText;
 
     private void Start() {
         rng = randomSeed == 0 ? new System.Random() : new System.Random(randomSeed);
@@ -559,12 +569,20 @@ public sealed class FlappyBirdGame : MonoBehaviour {
         GameObject hudRoot = new GameObject("Arcade HUD");
         hudRoot.layer = renderLayer;
         hudRoot.transform.SetParent(transform, false);
-        arcadeScoreText = CreateHudText(hudRoot.transform, "Score", new Vector3(0.0f, 4.08f, -0.1f), 0.78f, FontStyle.Bold);
-        arcadeMessageText = CreateHudText(hudRoot.transform, "Message", new Vector3(0.0f, 1.15f, -0.1f), 0.48f, FontStyle.Bold);
-        arcadeSmallText = CreateHudText(hudRoot.transform, "Small Message", new Vector3(0.0f, 0.36f, -0.1f), 0.25f, FontStyle.Normal);
+        arcadeScoreText = CreateHudText(hudRoot.transform, "Score", new Vector3(0.0f, 4.45f, -0.1f), ArcadeHudScoreSize, FontStyle.Bold);
+        arcadeMessageText = CreateHudText(hudRoot.transform, "Message", new Vector3(0.0f, 3.95f, -0.1f), ArcadeHudTitleSize, FontStyle.Bold);
+        arcadeSmallText = CreateHudText(hudRoot.transform, "Small Message", new Vector3(0.0f, 3.14f, -0.1f), ArcadeHudBodySize, FontStyle.Bold);
+        arcadePromptText = CreateHudText(hudRoot.transform, "Prompt", new Vector3(0.0f, 2.52f, -0.1f), ArcadeHudBodySize, FontStyle.Normal);
     }
 
-    private TextMesh CreateHudText(Transform parent, string name, Vector3 localPosition, float characterSize, FontStyle fontStyle) {
+    private HudText CreateHudText(Transform parent, string name, Vector3 localPosition, float characterSize, FontStyle fontStyle) {
+        Vector3 shadowPosition = localPosition + new Vector3(ArcadeHudShadowOffset, -ArcadeHudShadowOffset, 0.0f);
+        TextMesh shadow = CreateHudTextMesh(parent, name + " Shadow", shadowPosition, characterSize, fontStyle, new Color(0.0f, 0.0f, 0.0f, 0.62f), 99);
+        TextMesh foreground = CreateHudTextMesh(parent, name, localPosition, characterSize, fontStyle, Color.white, 100);
+        return new HudText { foreground = foreground, shadow = shadow };
+    }
+
+    private TextMesh CreateHudTextMesh(Transform parent, string name, Vector3 localPosition, float characterSize, FontStyle fontStyle, Color color, int sortingOrder) {
         GameObject textObject = new GameObject(name);
         textObject.layer = renderLayer;
         textObject.transform.SetParent(parent, false);
@@ -576,11 +594,20 @@ public sealed class FlappyBirdGame : MonoBehaviour {
         textMesh.characterSize = characterSize;
         textMesh.fontSize = 96;
         textMesh.fontStyle = fontStyle;
-        textMesh.color = Color.white;
+        textMesh.color = color;
 
         MeshRenderer renderer = textObject.GetComponent<MeshRenderer>();
-        renderer.sortingOrder = 100;
+        renderer.sortingOrder = sortingOrder;
         return textMesh;
+    }
+
+    private static void SetHudText(HudText hudText, string value) {
+        if (hudText == null) {
+            return;
+        }
+
+        hudText.foreground.text = value;
+        hudText.shadow.text = value;
     }
 
     private static void SetLayerRecursively(GameObject root, int layer) {
@@ -596,16 +623,19 @@ public sealed class FlappyBirdGame : MonoBehaviour {
             return;
         }
 
-        arcadeScoreText.text = state == GameState.Playing || state == GameState.GameOver ? score.ToString() : "";
+        SetHudText(arcadeScoreText, state == GameState.Playing ? score.ToString() : "");
         if (state == GameState.Ready) {
-            arcadeMessageText.text = "FLOPPY BIRD";
-            arcadeSmallText.text = "SPACE / CLICK TO FLAP\nBEST: " + bestScore;
+            SetHudText(arcadeMessageText, "FLOPPY BIRD");
+            SetHudText(arcadeSmallText, "BEST: " + bestScore);
+            SetHudText(arcadePromptText, "SPACE / CLICK TO FLAP");
         } else if (state == GameState.GameOver) {
-            arcadeMessageText.text = "GAME OVER";
-            arcadeSmallText.text = "SCORE: " + score + "   BEST: " + bestScore + "\nSPACE TO RETRY";
+            SetHudText(arcadeMessageText, "GAME OVER");
+            SetHudText(arcadeSmallText, "SCORE: " + score + "   BEST: " + bestScore);
+            SetHudText(arcadePromptText, "SPACE TO RETRY");
         } else {
-            arcadeMessageText.text = "";
-            arcadeSmallText.text = "";
+            SetHudText(arcadeMessageText, "");
+            SetHudText(arcadeSmallText, "");
+            SetHudText(arcadePromptText, "");
         }
     }
 

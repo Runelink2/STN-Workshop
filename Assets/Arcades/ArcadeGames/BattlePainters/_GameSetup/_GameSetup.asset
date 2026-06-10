@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0846f90c11d75084597495e5a8cb543b, type: 3}
+  m_Name: _GameSetup
+  m_EditorClassIdentifier: 
+  machineFolderPath: Assets\Arcades\ArcadeGames\BattlePainters\_GameSetup
+  gameName: Paint Battle
+  arcadeMachineColor: {r: 0.8247626, g: 0.44313726, b: 0.8745098, a: 1}
+  arcadeGamePrefabName: ArcadeGame
+  arcadeTextureName: txt_Arcade
+  arcadeEmissionName: txt_Arcade_em
+  insertCoinTextureName: txt_InsertCoin
+  arcadeGamePrefab: {fileID: 7322771587497186681, guid: a1c312b7ba3c14e4fa495d17fdfc0079, type: 3}
+  arcadeTexture: {fileID: 2800000, guid: e1dfdfc384782f64badab27c3a9fcbae, type: 3}
+  arcadeEmission: {fileID: 2800000, guid: 4d2e67fbb3dbac94382c57b696d8e9e6, type: 3}
+  insertCoinTexture: {fileID: 2800000, guid: e4abab87d9d60b646a94735da5bb4183, type: 3}

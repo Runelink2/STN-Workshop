@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0846f90c11d75084597495e5a8cb543b, type: 3}
+  m_Name: _GameSetup
+  m_EditorClassIdentifier: 
+  machineFolderPath: Assets\Arcades\ArcadeGames\Jumping Dead\_GameSetup
+  gameName: Jumping Dead
+  arcadeMachineColor: {r: 1, g: 1, b: 1, a: 1}
+  arcadeGamePrefabName: ArcadeGame
+  arcadeTextureName: txt_Arcade
+  arcadeEmissionName: txt_Arcade_em
+  insertCoinTextureName: txt_InsertCoin
+  arcadeGamePrefab: {fileID: 7322771587497186681, guid: 21a7a59c4a4b2c4478aa253ec59c175a, type: 3}
+  arcadeTexture: {fileID: 2800000, guid: a99999c9fd9a3fc438ce6c1393ee8fbb, type: 3}
+  arcadeEmission: {fileID: 2800000, guid: 9564377b071a979498f99bcf85f2d87f, type: 3}
+  insertCoinTexture: {fileID: 2800000, guid: 991146ffda35d164f9ae3fb482892284, type: 3}

@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0846f90c11d75084597495e5a8cb543b, type: 3}
+  m_Name: _GameSetup
+  m_EditorClassIdentifier: 
+  machineFolderPath: Assets\Arcades\ArcadeGames\ZombieSurvival\_GameSetup
+  gameName: Survive the Nights
+  arcadeMachineColor: {r: 0.4339623, g: 0.18627627, b: 0.18627627, a: 1}
+  arcadeGamePrefabName: ArcadeGame
+  arcadeTextureName: txt_Arcade
+  arcadeEmissionName: txt_Arcade_em
+  insertCoinTextureName: txt_InsertCoin
+  arcadeGamePrefab: {fileID: 7322771587497186681, guid: a0b66145697543644a205e3906ca9c29, type: 3}
+  arcadeTexture: {fileID: 2800000, guid: bc1ce3f8a530d9542b0c9381464e8870, type: 3}
+  arcadeEmission: {fileID: 2800000, guid: f8fdc7d351052c4428adba54e0a589cd, type: 3}
+  insertCoinTexture: {fileID: 2800000, guid: 4cf21cc4d98fb1a42817853d4d6926e2, type: 3}
