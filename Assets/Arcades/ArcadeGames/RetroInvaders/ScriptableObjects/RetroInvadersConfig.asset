@@ -1,0 +1,81 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 14d717fed0be65f43b0581ef4ff5e902, type: 3}
+  m_Name: RetroInvadersConfig
+  m_EditorClassIdentifier: 
+  playfieldCenter: {x: 0, y: 0}
+  playfieldSize: {x: 16, y: 10}
+  spritePixelSize: {x: 0.07, y: 0.06}
+  playerHalfExtents: {x: 0.45, y: 0.25}
+  playerSpeed: 7
+  playerStartY: -4.25
+  playerHorizontalPadding: 0.2
+  playerDeathDelay: 1.15
+  playerRespawnInvulnerableSeconds: 1.5
+  playerRespawnBlinkRate: 7
+  startingLives: 3
+  playerProjectileSpeed: 12
+  invaderProjectileSpeed: 5.5
+  invaderProjectileDamage: 1
+  projectileLifetime: 4
+  playerFireCooldown: 0.28
+  playerProjectileDamage: 1
+  projectilePoolInitialSize: 24
+  projectilePoolMaxSize: 96
+  projectileVisualScale: {x: 0.18, y: 0.48, z: 0.18}
+  invaderRows: 5
+  invaderColumns: 11
+  invaderSpacingX: 1.05
+  invaderSpacingY: 0.65
+  invaderStartY: 3.25
+  invaderBaseSpeed: 0.85
+  invaderMaxSpeedMultiplier: 3.5
+  invaderMovementMode: 1
+  invaderStepPixels: 1
+  invaderStepRateScale: 0.5
+  invaderStepDistance: 0.24
+  invaderStepIntervalMin: 0.055
+  invaderStepIntervalMax: 0.48
+  invaderEdgePadding: 0.45
+  invaderDescentStep: 0.35
+  invaderHealth: 1
+  invaderScoreBase: 10
+  waveClearDelay: 1.25
+  invaderFireIntervalMin: 0.35
+  invaderFireIntervalMax: 1.2
+  invaderFireIntervalWaveScale: 0.92
+  invaderFireIntervalLowCountScale: 0.5
+  shieldCount: 4
+  shieldBlockSize: {x: 0.07, y: 0.06}
+  shieldBlocksHealth: 1
+  shieldY: -2.95
+  shieldWidthPattern: 24
+  shieldCoverageFraction: 0.64
+  shieldResetEveryWave: 1
+  ufoSpeed: 3.8
+  ufoSpawnIntervalMin: 12
+  ufoSpawnIntervalMax: 22
+  ufoScoreValues: 64000000960000002c010000
+  ufoY: 4.15
+  bottomEnemyScore: 10
+  middleEnemyScore: 20
+  topEnemyScore: 30
+  scorePopupDuration: 0.85
+  scorePopupRiseDistance: 54
+  sfxMasterVolume: 1
+  sfxVolume: 1
+  muzzleFlashDuration: 0.08
+  explosionDuration: 0.22
+  screenShakeDuration: 0.12
+  screenShakeMagnitude: 0.08
+  waveSpeedMultiplier: 1.12
+  invaderDangerY: -4.05
