@@ -13,11 +13,12 @@ MonoBehaviour:
   m_Name: RetroInvadersConfig
   m_EditorClassIdentifier: 
   playfieldCenter: {x: 0, y: 0}
-  playfieldSize: {x: 16, y: 10}
+  playfieldSize: {x: 18, y: 13.5}
   spritePixelSize: {x: 0.07, y: 0.06}
+  backgroundTexture: {fileID: 2800000, guid: a135fceffebd61649a5a0e8ea344ccee, type: 3}
   playerHalfExtents: {x: 0.45, y: 0.25}
   playerSpeed: 7
-  playerStartY: -4.25
+  playerStartY: -5.75
   playerHorizontalPadding: 0.2
   playerDeathDelay: 1.15
   playerRespawnInvulnerableSeconds: 1.5
@@ -36,7 +37,7 @@ MonoBehaviour:
   invaderColumns: 11
   invaderSpacingX: 1.05
   invaderSpacingY: 0.65
-  invaderStartY: 3.25
+  invaderStartY: 4.45
   invaderBaseSpeed: 0.85
   invaderMaxSpeedMultiplier: 3.5
   invaderMovementMode: 1
@@ -57,7 +58,7 @@ MonoBehaviour:
   shieldCount: 4
   shieldBlockSize: {x: 0.07, y: 0.06}
   shieldBlocksHealth: 1
-  shieldY: -2.95
+  shieldY: -4.15
   shieldWidthPattern: 24
   shieldCoverageFraction: 0.64
   shieldResetEveryWave: 1
@@ -65,7 +66,7 @@ MonoBehaviour:
   ufoSpawnIntervalMin: 12
   ufoSpawnIntervalMax: 22
   ufoScoreValues: 64000000960000002c010000
-  ufoY: 4.15
+  ufoY: 5.75
   bottomEnemyScore: 10
   middleEnemyScore: 20
   topEnemyScore: 30
@@ -78,4 +79,4 @@ MonoBehaviour:
   screenShakeDuration: 0.12
   screenShakeMagnitude: 0.08
   waveSpeedMultiplier: 1.12
-  invaderDangerY: -4.05
+  invaderDangerY: -5.25

@@ -3,6 +3,8 @@ using UnityEngine;
 
 namespace RetroInvaders {
     public sealed class InvaderFleetController : MonoBehaviour {
+        private const int MaxStepCatchUpPerFrame = 8;
+
         [SerializeField] private GameSession session;
         [SerializeField] private GameConfig config;
         [SerializeField] private PlayArea playArea;
@@ -189,20 +191,34 @@ namespace RetroInvaders {
         private void MoveFleetStepped() {
             stepTimer -= Time.deltaTime;
 
-            if (stepTimer > 0.0f) {
-                return;
+            int stepsThisFrame = 0;
+            while (stepTimer <= 0.0f && stepsThisFrame < MaxStepCatchUpPerFrame) {
+                if (!StepFleet()) {
+                    stepTimer = GetCurrentStepInterval();
+                    return;
+                }
+
+                stepsThisFrame++;
+                stepTimer += GetCurrentStepInterval();
+                CheckDangerLine();
+
+                if (session == null
+                    || session.CurrentState != GameSession.GameState.Playing
+                    || activeCount <= 0) {
+                    return;
+                }
             }
 
-            StepFleet();
-            stepTimer = GetCurrentStepInterval();
-            CheckDangerLine();
+            if (stepsThisFrame >= MaxStepCatchUpPerFrame && stepTimer <= 0.0f) {
+                stepTimer = 0.0f;
+            }
         }
 
-        private void StepFleet() {
+        private bool StepFleet() {
             float minX;
             float maxX;
             if (!TryGetActiveHorizontalBounds(out minX, out maxX)) {
-                return;
+                return false;
             }
 
             float leftLimit = playArea.Left + config.InvaderEdgePadding;
@@ -220,6 +236,8 @@ namespace RetroInvaders {
                 transform.position = playArea.GameToWorld(position);
                 NotifyStepAdvanced();
             }
+
+            return true;
         }
 
         private void CorrectAndDescend(float xCorrection) {

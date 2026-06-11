@@ -21,6 +21,7 @@ public sealed class DoodleJumpGame : MonoBehaviour {
     [SerializeField] private float enemyMinVerticalSpacing = 3.2f;
     [SerializeField] private int randomSeed = 0;
     [SerializeField] private bool showHud = true;
+    [SerializeField] private Font uiFont;
     [SerializeField] private Camera outputCamera;
     [SerializeField] private bool showStandaloneGui = true;
     [SerializeField] private Color paperColor = new Color(0.965f, 0.96f, 0.92f, 1.0f);
@@ -838,8 +839,14 @@ public sealed class DoodleJumpGame : MonoBehaviour {
         textMesh.fontSize = 96;
         textMesh.fontStyle = fontStyle;
         textMesh.color = new Color(0.08f, 0.07f, 0.08f, 1.0f);
+        if (uiFont != null) {
+            textMesh.font = uiFont;
+        }
 
         MeshRenderer renderer = textObject.GetComponent<MeshRenderer>();
+        if (uiFont != null) {
+            renderer.sharedMaterial = uiFont.material;
+        }
         renderer.sortingOrder = 100;
         return textMesh;
     }
@@ -901,6 +908,7 @@ public sealed class DoodleJumpGame : MonoBehaviour {
         }
 
         scoreStyle = new GUIStyle(GUI.skin.label) {
+            font = uiFont,
             fontSize = Mathf.RoundToInt(Screen.height * 0.06f),
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter

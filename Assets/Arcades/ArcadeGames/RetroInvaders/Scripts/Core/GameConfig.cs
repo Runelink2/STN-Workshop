@@ -7,20 +7,23 @@ namespace RetroInvaders {
         Stepped
     }
 
-    [CreateAssetMenu(menuName = "Retro Invaders/Game Config", fileName = "RetroInvadersConfig")]
+    [CreateAssetMenu(menuName = "Space Zombies/Game Config", fileName = "RetroInvadersConfig")]
     public sealed class GameConfig : ScriptableObject {
         [Header("Playfield")]
         [SerializeField] private Vector2 playfieldCenter = Vector2.zero;
-        [SerializeField] private Vector2 playfieldSize = new Vector2(16.0f, 10.0f);
+        [SerializeField] private Vector2 playfieldSize = new Vector2(18.0f, 13.5f);
 
         [Header("Visual Grid")]
         [SerializeField] private Vector2 spritePixelSize = new Vector2(0.07f, 0.06f);
+
+        [Header("Background")]
+        [SerializeField] private Texture2D backgroundTexture;
 
         [Header("Player")]
         [SerializeField] private Vector2 playerHalfExtents = new Vector2(0.45f, 0.25f);
         [FormerlySerializedAs("playerMoveSpeed")]
         [SerializeField] private float playerSpeed = 7.0f;
-        [SerializeField] private float playerStartY = -4.25f;
+        [SerializeField] private float playerStartY = -5.75f;
         [SerializeField] private float playerHorizontalPadding = 0.2f;
         [SerializeField] private float playerDeathDelay = 1.15f;
         [SerializeField] private float playerRespawnInvulnerableSeconds = 1.5f;
@@ -48,7 +51,7 @@ namespace RetroInvaders {
         [SerializeField] private int invaderColumns = 11;
         [SerializeField] private float invaderSpacingX = 1.05f;
         [SerializeField] private float invaderSpacingY = 0.65f;
-        [SerializeField] private float invaderStartY = 3.25f;
+        [SerializeField] private float invaderStartY = 4.45f;
         [FormerlySerializedAs("enemyBaseSpeed")]
         [SerializeField] private float invaderBaseSpeed = 0.85f;
         [SerializeField] private float invaderMaxSpeedMultiplier = 3.5f;
@@ -76,7 +79,7 @@ namespace RetroInvaders {
         [SerializeField] private Vector2 shieldBlockSize = new Vector2(0.07f, 0.06f);
         [FormerlySerializedAs("shieldBlockHitPoints")]
         [SerializeField] private int shieldBlocksHealth = 1;
-        [SerializeField] private float shieldY = -2.95f;
+        [SerializeField] private float shieldY = -4.15f;
         [SerializeField] private int shieldWidthPattern = 24;
         [SerializeField] private float shieldCoverageFraction = 0.64f;
         [SerializeField] private bool shieldResetEveryWave = true;
@@ -87,7 +90,7 @@ namespace RetroInvaders {
         [FormerlySerializedAs("ufoSpawnInterval")]
         [SerializeField] private float ufoSpawnIntervalMax = 22.0f;
         [SerializeField] private int[] ufoScoreValues = { 100, 150, 300 };
-        [SerializeField] private float ufoY = 4.15f;
+        [SerializeField] private float ufoY = 5.75f;
 
         [Header("Score")]
         [SerializeField] private int bottomEnemyScore = 10;
@@ -106,11 +109,12 @@ namespace RetroInvaders {
 
         [Header("Difficulty")]
         [SerializeField] private float waveSpeedMultiplier = 1.12f;
-        [SerializeField] private float invaderDangerY = -4.05f;
+        [SerializeField] private float invaderDangerY = -5.25f;
 
         public Vector2 PlayfieldCenter => playfieldCenter;
         public Vector2 PlayfieldSize => playfieldSize;
         public Vector2 SpritePixelSize => spritePixelSize;
+        public Texture2D BackgroundTexture => backgroundTexture;
         public Vector2 PlayerSpawnPosition => new Vector2(playfieldCenter.x, playerStartY);
         public Vector2 PlayerHalfExtents => playerHalfExtents;
         public float PlayerSpeed => playerSpeed;

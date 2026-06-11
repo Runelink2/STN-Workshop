@@ -21,6 +21,7 @@ namespace RetroInvaders {
         private const string ShieldBlockPrefabPath = PrefabsPath + "/ShieldBlock.prefab";
         private const string UfoPrefabPath = PrefabsPath + "/UFO.prefab";
         private const string VfxFlashPrefabPath = PrefabsPath + "/VfxFlash.prefab";
+        private const string ArcadeFontPath = "Assets/_Internal/Fonts/font_8bit.TTF";
 
         private static readonly string[][] InvaderPatterns = {
             new[] {
@@ -110,13 +111,13 @@ namespace RetroInvaders {
             "    R      R    "
         };
 
-        [MenuItem("Tools/Retro Invaders/Build Game Scene")]
+        [MenuItem("Tools/Space Zombies/Build Game Scene")]
         public static void BuildGameScene() {
             EnsureFolders();
 
             GameConfig config = EnsureConfig();
-            Material borderMaterial = EnsureMaterial("MI_PlayAreaBorder", new Color(0.0f, 0.85f, 1.0f));
-            Material floorMaterial = EnsureMaterial("MI_PlayfieldScreen", new Color(0.01f, 0.012f, 0.018f));
+            Material borderMaterial = EnsureMaterial("MI_PlayAreaBorder", new Color(1.0f, 0.08f, 0.08f));
+            Material floorMaterial = EnsureScreenMaterial("MI_PlayfieldScreen", new Color(0.01f, 0.012f, 0.018f));
             Material playerHullMaterial = EnsureMaterial("MI_PlayerHull", new Color(0.08f, 0.95f, 0.38f));
             Material playerAccentMaterial = EnsureMaterial("MI_PlayerAccent", new Color(0.85f, 1.0f, 0.45f));
             Material playerProjectileMaterial = EnsureMaterial("MI_PlayerProjectile", new Color(0.98f, 1.0f, 0.55f));
@@ -164,7 +165,7 @@ namespace RetroInvaders {
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
-            Debug.Log("Retro Invaders scaffold scene built at " + ScenePath);
+            Debug.Log("Space Zombies scaffold scene built at " + ScenePath);
         }
 
         private static void EnsureFolders() {
@@ -220,6 +221,35 @@ namespace RetroInvaders {
             }
 
             material.color = color;
+            EditorUtility.SetDirty(material);
+            return material;
+        }
+
+        private static Material EnsureScreenMaterial(string name, Color fallbackColor) {
+            string path = MaterialsPath + "/" + name + ".mat";
+            Material material = AssetDatabase.LoadAssetAtPath<Material>(path);
+            Shader shader = Shader.Find("Standard");
+
+            if (shader == null) {
+                shader = Shader.Find("Unlit/Texture");
+            }
+
+            if (shader == null) {
+                shader = Shader.Find("Unlit/Color");
+            }
+
+            if (material == null) {
+                material = new Material(shader);
+                AssetDatabase.CreateAsset(material, path);
+            } else if (shader != null && material.shader != shader) {
+                material.shader = shader;
+            }
+
+            material.color = fallbackColor;
+            if (material.HasProperty("_MainTex")) {
+                material.SetTexture("_MainTex", null);
+            }
+
             EditorUtility.SetDirty(material);
             return material;
         }
@@ -483,7 +513,8 @@ namespace RetroInvaders {
             float halfHeight = size.y * 0.5f;
             float thickness = 0.08f;
 
-            CreateCube("Screen Plane", playAreaObject.transform, new Vector3(center.x, center.y, 0.2f), new Vector3(size.x, size.y, 0.04f), floorMaterial);
+            GameObject screenPlane = CreateCube("Screen Plane", playAreaObject.transform, new Vector3(center.x, center.y, 0.2f), new Vector3(size.x, size.y, 0.04f), floorMaterial);
+            playArea.SetBackgroundRenderer(screenPlane.GetComponent<Renderer>());
             CreateCube("Top", borderRoot.transform, new Vector3(center.x, center.y + halfHeight, 0.0f), new Vector3(size.x, thickness, 0.12f), borderMaterial);
             CreateCube("Bottom", borderRoot.transform, new Vector3(center.x, center.y - halfHeight, 0.0f), new Vector3(size.x, thickness, 0.12f), borderMaterial);
             CreateCube("Left", borderRoot.transform, new Vector3(center.x - halfWidth, center.y, 0.0f), new Vector3(thickness, size.y, 0.12f), borderMaterial);
@@ -500,10 +531,10 @@ namespace RetroInvaders {
 
             Camera camera = cameraObject.AddComponent<Camera>();
             camera.orthographic = true;
-            float targetAspect = 16.0f / 9.0f;
+            float targetAspect = 4.0f / 3.0f;
             float heightSize = config.PlayfieldSize.y * 0.5f;
             float widthSize = config.PlayfieldSize.x / targetAspect * 0.5f;
-            camera.orthographicSize = Mathf.Max(heightSize, widthSize) + 0.7f;
+            camera.orthographicSize = Mathf.Max(heightSize, widthSize) + 0.15f;
             camera.clearFlags = CameraClearFlags.SolidColor;
             camera.backgroundColor = new Color(0.005f, 0.006f, 0.01f);
             camera.nearClipPlane = 0.05f;
@@ -663,7 +694,10 @@ namespace RetroInvaders {
         }
 
         private static ScorePopupController CreateHud(Transform root, GameSession session, Camera worldCamera) {
-            Font font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            Font font = AssetDatabase.LoadAssetAtPath<Font>(ArcadeFontPath);
+            if (font == null) {
+                font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            }
 
             GameObject canvasObject = new GameObject("HUD Canvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             canvasObject.transform.SetParent(root, false);
@@ -674,19 +708,19 @@ namespace RetroInvaders {
 
             CanvasScaler scaler = canvasObject.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920.0f, 1080.0f);
+            scaler.referenceResolution = new Vector2(960.0f, 720.0f);
             scaler.matchWidthOrHeight = 0.5f;
 
-            Text score = CreateText(canvasObject.transform, "ScoreText", font, 30, TextAnchor.UpperLeft, new Vector2(0.0f, 1.0f), new Vector2(0.0f, 1.0f), new Vector2(36.0f, -30.0f), new Vector2(430.0f, 46.0f));
-            Text highScore = CreateText(canvasObject.transform, "HighScoreText", font, 30, TextAnchor.UpperCenter, new Vector2(0.5f, 1.0f), new Vector2(0.5f, 1.0f), new Vector2(0.0f, -30.0f), new Vector2(460.0f, 46.0f));
-            Text lives = CreateText(canvasObject.transform, "LivesText", font, 30, TextAnchor.UpperRight, new Vector2(1.0f, 1.0f), new Vector2(1.0f, 1.0f), new Vector2(-36.0f, -30.0f), new Vector2(320.0f, 46.0f));
-            Text wave = CreateText(canvasObject.transform, "WaveText", font, 26, TextAnchor.UpperRight, new Vector2(1.0f, 1.0f), new Vector2(1.0f, 1.0f), new Vector2(-36.0f, -74.0f), new Vector2(320.0f, 40.0f));
+            Text score = CreateText(canvasObject.transform, "ScoreText", font, 40, TextAnchor.UpperLeft, new Vector2(0.0f, 1.0f), new Vector2(0.0f, 1.0f), new Vector2(268.0f, -92.0f), new Vector2(440.0f, 60.0f));
+            Text highScore = CreateText(canvasObject.transform, "HighScoreText", font, 40, TextAnchor.UpperCenter, new Vector2(0.5f, 1.0f), new Vector2(0.5f, 1.0f), new Vector2(0.0f, -92.0f), new Vector2(560.0f, 60.0f));
+            Text lives = CreateText(canvasObject.transform, "LivesText", font, 40, TextAnchor.UpperRight, new Vector2(1.0f, 1.0f), new Vector2(1.0f, 1.0f), new Vector2(-218.0f, -92.0f), new Vector2(340.0f, 60.0f));
+            Text wave = CreateText(canvasObject.transform, "WaveText", font, 36, TextAnchor.UpperRight, new Vector2(1.0f, 1.0f), new Vector2(1.0f, 1.0f), new Vector2(-218.0f, -142.0f), new Vector2(340.0f, 54.0f));
 
             GameObject panel = CreateMessagePanel(canvasObject.transform);
-            Text title = CreateText(panel.transform, "TitleText", font, 64, TextAnchor.MiddleCenter, new Vector2(0.0f, 0.68f), new Vector2(1.0f, 1.0f), Vector2.zero, Vector2.zero);
-            Text body = CreateText(panel.transform, "BodyText", font, 25, TextAnchor.MiddleCenter, new Vector2(0.08f, 0.28f), new Vector2(0.92f, 0.68f), Vector2.zero, Vector2.zero);
-            Text prompt = CreateText(panel.transform, "PromptText", font, 30, TextAnchor.MiddleCenter, new Vector2(0.0f, 0.1f), new Vector2(1.0f, 0.28f), Vector2.zero, Vector2.zero);
-            Text footer = CreateText(panel.transform, "FooterText", font, 18, TextAnchor.MiddleCenter, new Vector2(0.0f, 0.0f), new Vector2(1.0f, 0.1f), Vector2.zero, Vector2.zero);
+            Text title = CreateText(panel.transform, "TitleText", font, 96, TextAnchor.MiddleCenter, new Vector2(0.0f, 0.62f), new Vector2(1.0f, 1.0f), Vector2.zero, Vector2.zero);
+            Text body = CreateText(panel.transform, "BodyText", font, 36, TextAnchor.MiddleCenter, new Vector2(0.08f, 0.35f), new Vector2(0.92f, 0.62f), Vector2.zero, Vector2.zero);
+            Text prompt = CreateText(panel.transform, "PromptText", font, 46, TextAnchor.MiddleCenter, new Vector2(0.0f, 0.16f), new Vector2(1.0f, 0.34f), Vector2.zero, Vector2.zero);
+            Text footer = CreateText(panel.transform, "FooterText", font, 24, TextAnchor.MiddleCenter, new Vector2(0.0f, 0.04f), new Vector2(1.0f, 0.14f), Vector2.zero, Vector2.zero);
             footer.color = new Color(0.62f, 0.86f, 0.9f, 1.0f);
 
             HUDController hud = canvasObject.AddComponent<HUDController>();
@@ -707,7 +741,7 @@ namespace RetroInvaders {
             popupRoot.anchoredPosition = Vector2.zero;
             popupRoot.sizeDelta = Vector2.zero;
 
-            Text templateText = CreateText(popupRoot, "ScorePopupTemplate", font, 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(150.0f, 44.0f));
+            Text templateText = CreateText(popupRoot, "ScorePopupTemplate", font, 34, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(180.0f, 50.0f));
             templateText.color = new Color(1.0f, 0.95f, 0.35f, 1.0f);
             ScorePopup template = templateText.gameObject.AddComponent<ScorePopup>();
             template.Hide();
@@ -726,7 +760,7 @@ namespace RetroInvaders {
             rect.anchorMax = new Vector2(0.5f, 0.5f);
             rect.pivot = new Vector2(0.5f, 0.5f);
             rect.anchoredPosition = Vector2.zero;
-            rect.sizeDelta = new Vector2(900.0f, 390.0f);
+            rect.sizeDelta = new Vector2(820.0f, 400.0f);
 
             Image image = panel.GetComponent<Image>();
             image.color = new Color(0.0f, 0.0f, 0.0f, 0.68f);

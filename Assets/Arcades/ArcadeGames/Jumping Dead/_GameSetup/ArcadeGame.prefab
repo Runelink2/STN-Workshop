@@ -139,6 +139,7 @@ MonoBehaviour:
   enemyMinVerticalSpacing: 3.2
   randomSeed: 0
   showHud: 1
+  uiFont: {fileID: 12800000, guid: 1458003ce35d1934eb651229dca70efb, type: 3}
   outputCamera: {fileID: 335139958}
   showStandaloneGui: 0
   paperColor: {r: 0.965, g: 0.96, b: 0.92, a: 1}

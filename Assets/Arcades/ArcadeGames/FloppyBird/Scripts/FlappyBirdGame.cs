@@ -17,6 +17,7 @@ public sealed class FlappyBirdGame : MonoBehaviour {
     [SerializeField] private float ceilingY = 5.0f;
     [SerializeField] private int randomSeed = 0;
     [SerializeField] private bool showHud = true;
+    [SerializeField] private Font uiFont;
     [SerializeField] private Camera outputCamera;
     [SerializeField] private bool showStandaloneGui = true;
     [SerializeField] private Color skyColor = new Color(0.443f, 0.78f, 0.875f, 1.0f);
@@ -595,8 +596,14 @@ public sealed class FlappyBirdGame : MonoBehaviour {
         textMesh.fontSize = 96;
         textMesh.fontStyle = fontStyle;
         textMesh.color = color;
+        if (uiFont != null) {
+            textMesh.font = uiFont;
+        }
 
         MeshRenderer renderer = textObject.GetComponent<MeshRenderer>();
+        if (uiFont != null) {
+            renderer.sharedMaterial = uiFont.material;
+        }
         renderer.sortingOrder = sortingOrder;
         return textMesh;
     }
@@ -667,6 +674,7 @@ public sealed class FlappyBirdGame : MonoBehaviour {
         }
 
         scoreStyle = new GUIStyle(GUI.skin.label) {
+            font = uiFont,
             fontSize = Mathf.RoundToInt(Screen.height * 0.07f),
             fontStyle = FontStyle.Bold,
             alignment = TextAnchor.MiddleCenter

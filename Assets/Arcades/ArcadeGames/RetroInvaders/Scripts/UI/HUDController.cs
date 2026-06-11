@@ -167,10 +167,10 @@ namespace RetroInvaders {
 
             switch (state) {
                 case GameSession.GameState.Title:
-                    title = "RETRO INVADERS";
-                    body = "Move: A/D or Arrow Keys\nFire: Space\nPause: P or Escape";
-                    prompt = "Press Enter to Start";
-                    footer = "Bonus: hit the UFO for extra points";
+                    title = "SPACE ZOMBIES";
+                    body = "MOVE A/D OR ARROWS\nFIRE SPACE\nPAUSE P / ESC";
+                    prompt = "PRESS ENTER TO START";
+                    footer = "HIT UFO FOR BONUS POINTS";
                     break;
                 case GameSession.GameState.Paused:
                     title = "PAUSED";
@@ -191,8 +191,8 @@ namespace RetroInvaders {
                     title = "GAME OVER";
                     body = "Final Score " + (session != null ? session.Score.ToString("00000") : "00000")
                         + "\nHigh Score " + (session != null ? session.HighScore.ToString("00000") : "00000");
-                    prompt = "Press Enter to Restart";
-                    footer = "Escape returns to Title";
+                    prompt = "PRESS ENTER TO RESTART";
+                    footer = "ESC RETURNS TO TITLE";
                     break;
                 default:
                     showPanel = false;

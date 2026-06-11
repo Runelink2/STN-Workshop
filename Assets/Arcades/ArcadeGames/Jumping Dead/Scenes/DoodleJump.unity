@@ -270,6 +270,7 @@ MonoBehaviour:
   enemyMinVerticalSpacing: 3.2
   randomSeed: 0
   showHud: 1
+  uiFont: {fileID: 12800000, guid: 1458003ce35d1934eb651229dca70efb, type: 3}
   paperColor: {r: 0.965, g: 0.96, b: 0.92, a: 1}
   gridColor: {r: 0.72, g: 0.83, b: 0.88, a: 1}
   playerColor: {r: 0.69, g: 0.85, b: 0.27, a: 1}

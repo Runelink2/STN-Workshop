@@ -26,6 +26,7 @@ public sealed class BattlePaintersGame : MonoBehaviour {
     [SerializeField] private bool animate = true;
     [SerializeField] private int cpuSeed = 12877;
     [SerializeField] private bool showHud = true;
+    [SerializeField] private Font uiFont;
     [SerializeField] private Camera outputCamera;
     [SerializeField] private bool showStandaloneGui = true;
     [SerializeField] private Vector3 arcadeCabinetOffset = new Vector3(0.0f, -300.0f, 0.0f);
@@ -583,6 +584,7 @@ public sealed class BattlePaintersGame : MonoBehaviour {
 
         if (hudStyle == null) {
             hudStyle = new GUIStyle(GUI.skin.box);
+            hudStyle.font = uiFont;
             hudStyle.alignment = TextAnchor.UpperLeft;
             hudStyle.fontSize = 14;
             hudStyle.padding = new RectOffset(12, 12, 10, 10);
@@ -661,6 +663,7 @@ public sealed class BattlePaintersGame : MonoBehaviour {
 
         if (centerMessageStyle == null) {
             centerMessageStyle = new GUIStyle(GUI.skin.box);
+            centerMessageStyle.font = uiFont;
             centerMessageStyle.alignment = TextAnchor.MiddleCenter;
             centerMessageStyle.fontSize = 20;
             centerMessageStyle.padding = new RectOffset(24, 24, 18, 18);
@@ -825,8 +828,14 @@ public sealed class BattlePaintersGame : MonoBehaviour {
         textMesh.fontSize = 96;
         textMesh.fontStyle = fontStyle;
         textMesh.color = color;
+        if (uiFont != null) {
+            textMesh.font = uiFont;
+        }
 
         MeshRenderer renderer = textObject.GetComponent<MeshRenderer>();
+        if (uiFont != null) {
+            renderer.sharedMaterial = uiFont.material;
+        }
         renderer.sortingOrder = sortingOrder;
         return textMesh;
     }

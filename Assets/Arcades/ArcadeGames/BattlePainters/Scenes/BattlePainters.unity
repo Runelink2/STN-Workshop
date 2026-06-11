@@ -356,6 +356,7 @@ MonoBehaviour:
   animate: 1
   cpuSeed: 12877
   showHud: 1
+  uiFont: {fileID: 12800000, guid: 1458003ce35d1934eb651229dca70efb, type: 3}
   showPlayerMarkers: 1
   matchBlockCount: 20
   matchBlockDuration: 5

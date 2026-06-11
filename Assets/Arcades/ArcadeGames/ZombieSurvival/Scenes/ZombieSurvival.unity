@@ -264,6 +264,7 @@ MonoBehaviour:
   waveBreakDuration: 2.5
   randomSeed: 0
   showHud: 1
+  uiFont: {fileID: 12800000, guid: 1458003ce35d1934eb651229dca70efb, type: 3}
   groundColor: {r: 0.16, g: 0.19, b: 0.15, a: 1}
   groundCheckerColor: {r: 0.14, g: 0.17, b: 0.13, a: 1}
   backgroundTexture: {fileID: 0}

@@ -135,6 +135,7 @@ MonoBehaviour:
   ceilingY: 5
   randomSeed: 0
   showHud: 1
+  uiFont: {fileID: 12800000, guid: 1458003ce35d1934eb651229dca70efb, type: 3}
   outputCamera: {fileID: 335139958}
   showStandaloneGui: 0
   skyColor: {r: 0.443, g: 0.78, b: 0.875, a: 1}

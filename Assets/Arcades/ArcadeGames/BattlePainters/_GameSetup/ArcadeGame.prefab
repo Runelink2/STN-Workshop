@@ -131,6 +131,7 @@ MonoBehaviour:
   animate: 1
   cpuSeed: 12877
   showHud: 1
+  uiFont: {fileID: 12800000, guid: 1458003ce35d1934eb651229dca70efb, type: 3}
   outputCamera: {fileID: 335139958}
   showStandaloneGui: 0
   arcadeCabinetOffset: {x: 0, y: -300, z: 0}
